@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 
 
+SOURCE_COLORS = {"codex": "tab:blue", "claude": "tab:orange"}
+
+
 def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, log_x=False):
     """Empirical CDF per source. Complements the histograms: the histogram shows
     distribution shape, the ECDF makes percentiles and cross-source stochastic
@@ -23,7 +26,11 @@ def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: P
             values = values[values.gt(0)]
         values = np.sort(values.to_numpy())
         if len(values):
-            style = {"color": "black", "linestyle": "--", "linewidth": 1.5} if source == "all" else {}
+            style = (
+                {"color": "black", "linestyle": "--", "linewidth": 1.5}
+                if source == "all"
+                else {"color": SOURCE_COLORS.get(source)}
+            )
             ax.plot(values, np.arange(1, len(values) + 1) / len(values), label=source, **style)
     if log_x:
         ax.set_xscale("log")
@@ -55,7 +62,14 @@ def _draw_hist(ax, frame, column, bins, clip_upper=None, log_x=False):
         if values.empty:
             continue
         weights = np.ones(len(values)) / len(values)
-        ax.hist(values, bins=bins, weights=weights, alpha=0.55, label=source)
+        ax.hist(
+            values,
+            bins=bins,
+            weights=weights,
+            alpha=0.55,
+            label=source,
+            color=SOURCE_COLORS.get(source),
+        )
 
 
 def plot_count_hist(
@@ -184,14 +198,26 @@ def make_plots(
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     for source, group in runs.groupby("source"):
         values = group["cache_read_ratio"].dropna()
-        axes[0].hist(values, bins=np.linspace(0, 1, 31), alpha=0.55, label=source)
+        axes[0].hist(
+            values,
+            bins=np.linspace(0, 1, 31),
+            alpha=0.55,
+            label=source,
+            color=SOURCE_COLORS.get(source),
+        )
     axes[0].set(title="Run cache-read ratio", xlabel="Cached / served input", ylabel="Runs")
     axes[0].legend()
     axes[0].grid(alpha=0.2)
 
     for source, group in threads.groupby("source"):
         values = group["cache_read_ratio"].dropna()
-        axes[1].hist(values, bins=np.linspace(0, 1, 31), alpha=0.55, label=source)
+        axes[1].hist(
+            values,
+            bins=np.linspace(0, 1, 31),
+            alpha=0.55,
+            label=source,
+            color=SOURCE_COLORS.get(source),
+        )
     axes[1].set(title="Thread cache-read ratio", xlabel="Cached / served input", ylabel="Threads")
     axes[1].legend()
     axes[1].grid(alpha=0.2)
@@ -206,10 +232,22 @@ def make_plots(
     for source, group in sample.groupby("source"):
         valid = group[group["served_input_tokens"].gt(0) & group["duration_seconds"].gt(0)]
         axes[0].scatter(
-            valid["served_input_tokens"], valid["duration_seconds"], s=12, alpha=0.35, label=source
+            valid["served_input_tokens"],
+            valid["duration_seconds"],
+            s=12,
+            alpha=0.35,
+            label=source,
+            color=SOURCE_COLORS.get(source),
         )
         valid = group[group["tool_calls"].gt(0) & group["duration_seconds"].gt(0)]
-        axes[1].scatter(valid["tool_calls"], valid["duration_seconds"], s=12, alpha=0.35, label=source)
+        axes[1].scatter(
+            valid["tool_calls"],
+            valid["duration_seconds"],
+            s=12,
+            alpha=0.35,
+            label=source,
+            color=SOURCE_COLORS.get(source),
+        )
     axes[0].set(
         title="Input load vs. end-to-end duration",
         xlabel="Served input tokens",
@@ -252,7 +290,10 @@ def make_plots(
         values.append(group["tokens"].to_numpy())
     if values:
         fig, ax = plt.subplots(figsize=(9, 5))
-        ax.boxplot(values, tick_labels=labels, showfliers=False)
+        boxes = ax.boxplot(values, tick_labels=labels, showfliers=False, patch_artist=True)
+        for box, label in zip(boxes["boxes"], labels, strict=True):
+            box.set_facecolor(SOURCE_COLORS.get(label.split("\n", 1)[0], "white"))
+            box.set_alpha(0.55)
         ax.set_yscale("log")
         ax.set(title="Tokens per run", ylabel="Tokens (log scale)")
         ax.grid(axis="y", alpha=0.25)
@@ -321,7 +362,7 @@ def make_plots(
         fig, axes = plt.subplots(1, len(source_names), figsize=(7 * len(source_names), 6), squeeze=False)
         for ax, source in zip(axes[0], source_names):
             top_tools = tool_calls[tool_calls["source"].eq(source)]["tool_name"].value_counts().head(12)
-            top_tools.sort_values().plot.barh(ax=ax)
+            top_tools.sort_values().plot.barh(ax=ax, color=SOURCE_COLORS.get(source))
             ax.set(title=f"Most-used tools: {source}", xlabel="Calls", ylabel="Tool")
             ax.grid(axis="x", alpha=0.25)
         fig.tight_layout()

@@ -209,7 +209,8 @@ def build_report(output_dir: Path, title: str) -> Path:
         if (data_dir / filename).exists():
             url = f"data/{quote(filename)}"
             chart_html.append(
-                f'<article class="panel chart"><a href="{url}"><img src="{url}" alt="{html.escape(heading)}"></a>'
+                f'<article class="panel chart"><a href="{url}" target="_blank" rel="noreferrer">'
+                f'<img src="{url}" alt="{html.escape(heading)}"></a>'
                 f'<h3>{html.escape(heading)}</h3><p>{html.escape(description)}</p></article>'
             )
 
