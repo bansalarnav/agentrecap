@@ -33,14 +33,6 @@ CHARTS = {
 }
 
 
-def discover_jsonl(path: Path) -> list[Path]:
-    if path.is_file():
-        return [path]
-    if not path.exists():
-        return []
-    return sorted(path.rglob("*.jsonl"))
-
-
 def format_value(value: object) -> str:
     if pd.isna(value):
         return "—"

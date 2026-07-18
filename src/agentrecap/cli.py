@@ -5,8 +5,8 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from .gather_session_data import discover_codex_jsonl
-from .report import build_report, discover_jsonl, run_pipeline
+from .adapters import claude_code, codex
+from .report import build_report, run_pipeline
 
 
 def main() -> None:
@@ -39,7 +39,7 @@ def main() -> None:
     codex_input = args.codex_input.expanduser().resolve()
     claude_input = args.claude_input.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
-    if not discover_codex_jsonl(codex_input) and not discover_jsonl(claude_input):
+    if not codex.discover_sessions(codex_input) and not claude_code.discover_sessions(claude_input):
         parser.error(f"No JSONL transcripts found in {codex_input} or {claude_input}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
