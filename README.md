@@ -8,6 +8,17 @@ uvx agentrecap
 pipx run agentrecap
 ```
 
+If you do not have `uvx` or `pipx` installed, clone the repository and run it with Python:
+
+```bash
+git clone https://github.com/bansalarnav/agentrecap.git
+cd agentrecap
+python3 -m pip install .
+python3 -m agentrecap.cli
+```
+
+`agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
+
 By default, `agentrecap` reads active and archived sessions from `~/.codex` and Claude Code sessions from `~/.claude/projects`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
 
 ```bash
