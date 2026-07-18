@@ -218,17 +218,13 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("estimated_cost_usd", ascending=False, na_position="last")
 
 
-def run_pipeline(codex_input: Path, claude_input: Path, output_dir: Path) -> None:
+def run_pipeline(inputs: dict[str, Path], output_dir: Path) -> None:
     data_dir = output_dir / "data"
     events_path = data_dir / "threads.csv"
     data_dir.mkdir(parents=True, exist_ok=True)
     for filename in CHARTS:
         (data_dir / filename).unlink(missing_ok=True)
-    convert_sessions(
-        codex_input,
-        claude_input,
-        events_path,
-    )
+    convert_sessions(inputs, events_path)
     print(f"Session data saved to {events_path}")
     print("Generating Report...")
     analyze_threads(events_path, data_dir)

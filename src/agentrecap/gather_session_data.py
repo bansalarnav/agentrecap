@@ -5,23 +5,19 @@ from pathlib import Path
 
 import pandas as pd
 
-from .adapters import claude_code, codex
+from .adapters import ADAPTERS
 from .adapters.common import anonymous_id
 
 
-def convert_sessions(
-    codex_input: Path,
-    claude_input: Path,
-    output: Path,
-) -> dict[str, int]:
+def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
     all_events = []
-    codex_paths = codex.discover_sessions(codex_input)
-    claude_paths = claude_code.discover_sessions(claude_input)
-
-    for path in codex_paths:
-        all_events.extend(codex.convert_thread(path))
-    for path in claude_paths:
-        all_events.extend(claude_code.convert_thread(path))
+    thread_counts = {}
+    for source, input_path in inputs.items():
+        adapter = ADAPTERS[source]
+        paths = adapter.discover_sessions(input_path)
+        thread_counts[source] = len(paths)
+        for path in paths:
+            all_events.extend(adapter.convert_thread(path))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     events_df = pd.DataFrame(all_events)
@@ -55,34 +51,30 @@ def convert_sessions(
 
     events_df.to_csv(output, index=False)
     return {
-        "codex_threads": len(codex_paths),
-        "claude_threads": len(claude_paths),
+        "threads": thread_counts,
         "events": len(all_events),
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert Codex and Claude Code sessions to a metadata-only CSV file.")
-    parser.add_argument(
-        "--codex-input",
-        type=Path,
-        default=Path.home() / ".codex",
-        help="Codex home directory, including active and archived sessions",
-    )
-    parser.add_argument(
-        "--claude-input",
-        type=Path,
-        default=Path.home() / ".claude" / "projects",
-        help="Claude Code projects directory",
-    )
+    parser = argparse.ArgumentParser(description="Convert agent sessions to a metadata-only CSV file.")
+    for source, adapter in ADAPTERS.items():
+        parser.add_argument(
+            f"--{source}-input",
+            type=Path,
+            default=adapter.DEFAULT_INPUT,
+            help=adapter.INPUT_HELP,
+        )
     parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.csv")
     args = parser.parse_args()
 
-    result = convert_sessions(args.codex_input, args.claude_input, args.output)
-    print(
-        f"Converted {result['codex_threads']} Codex threads and {result['claude_threads']} Claude threads "
-        f"({result['events']} events) into {args.output}"
+    inputs = {source: getattr(args, f"{source}_input") for source in ADAPTERS}
+    result = convert_sessions(inputs, args.output)
+    summary = " and ".join(
+        f"{count} {ADAPTERS[source].DISPLAY_NAME} threads"
+        for source, count in result["threads"].items()
     )
+    print(f"Converted {summary} ({result['events']} events) into {args.output}")
 
 
 if __name__ == "__main__":

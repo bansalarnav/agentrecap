@@ -5,7 +5,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from .adapters import claude_code, codex
+from .adapters import ADAPTERS
 from .report import build_report, run_pipeline
 
 
@@ -19,13 +19,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Convert Codex and Claude sessions, analyze them, and create an offline HTML report."
     )
-    parser.add_argument(
-        "--codex-input",
-        type=Path,
-        default=Path.home() / ".codex",
-        help="Codex home directory, including active and archived sessions",
-    )
-    parser.add_argument("--claude-input", type=Path, default=Path.home() / ".claude" / "projects")
+    for source, adapter in ADAPTERS.items():
+        parser.add_argument(
+            f"--{source}-input",
+            type=Path,
+            default=adapter.DEFAULT_INPUT,
+            help=adapter.INPUT_HELP,
+        )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -36,15 +36,18 @@ def main() -> None:
     parser.add_argument("--open", action="store_true", help="Open the finished report in the default browser")
     args = parser.parse_args()
 
-    codex_input = args.codex_input.expanduser().resolve()
-    claude_input = args.claude_input.expanduser().resolve()
+    inputs = {
+        source: getattr(args, f"{source}_input").expanduser().resolve()
+        for source in ADAPTERS
+    }
     output_dir = args.output_dir.expanduser().resolve()
-    if not codex.discover_sessions(codex_input) and not claude_code.discover_sessions(claude_input):
-        parser.error(f"No JSONL transcripts found in {codex_input} or {claude_input}")
+    if not any(ADAPTERS[source].discover_sessions(path) for source, path in inputs.items()):
+        paths = " or ".join(str(path) for path in inputs.values())
+        parser.error(f"No JSONL transcripts found in {paths}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print("Analysing...")
-    run_pipeline(codex_input, claude_input, output_dir)
+    run_pipeline(inputs, output_dir)
     index_path = build_report(output_dir, args.title)
     print(f'Generated report at "{index_path}"')
     if args.open:

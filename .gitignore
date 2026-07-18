@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+# Local npm name-holder package
+.npm-package/
+
 # Virtual environments
 .venv

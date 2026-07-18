@@ -5,6 +5,9 @@ from pathlib import Path
 from .common import anonymous_id, anonymous_id_or_none, read_jsonl_records, serialized_length, speed_status
 
 SOURCE = "codex"
+DISPLAY_NAME = "Codex"
+DEFAULT_INPUT = Path.home() / ".codex"
+INPUT_HELP = "Codex home directory, including active and archived sessions"
 
 
 def discover_sessions(path: Path) -> list[Path]:

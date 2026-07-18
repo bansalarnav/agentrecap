@@ -5,6 +5,9 @@ from pathlib import Path
 from .common import anonymous_id, anonymous_id_or_none, read_jsonl_records, serialized_length, speed_status
 
 SOURCE = "claude"
+DISPLAY_NAME = "Claude Code"
+DEFAULT_INPUT = Path.home() / ".claude" / "projects"
+INPUT_HELP = "Claude Code projects directory"
 
 
 def discover_sessions(path: Path) -> list[Path]:
