@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>{% include "report.css" %}</style>
+</head>
+<body>
+  <main>
+    <h1>{{ title }}</h1>
+    <p class="muted">Generated {{ generated }} · metadata-only local report</p>
+
+    <section class="cards">
+      {% for card in cards %}
+        <div class="card">
+          <span class="muted">{{ card.label }}</span>
+          <strong>{{ card.value }}</strong>
+        </div>
+      {% endfor %}
+    </section>
+
+    <h2>Charts</h2>
+    <section class="charts">
+      {% for chart in charts %}
+        <article class="panel chart">
+          <a href="{{ chart.url }}" target="_blank" rel="noreferrer">
+            <img src="{{ chart.url }}" alt="{{ chart.heading }}">
+          </a>
+          <h3>{{ chart.heading }}</h3>
+          <p>{{ chart.description }}</p>
+        </article>
+      {% endfor %}
+    </section>
+
+    {% for table in tables %}
+      <h2>{{ table.heading }}</h2>
+      <div class="panel">
+        {% if table.pricing_source %}
+          <p class="muted table-note">
+            Estimated from the
+            <a href="https://models.dev" target="_blank" rel="noreferrer">{{ table.pricing_source }}</a>
+            using standard USD-per-million-token API rates. Subscription pricing, discounts,
+            batch pricing, and long-context tiers are not included.
+            {% if table.unmatched_models %}
+              Unmatched model IDs: {{ table.unmatched_models | join(", ") }}.
+            {% endif %}
+          </p>
+        {% endif %}
+        <table>
+          <thead>
+            <tr>
+              {% for header in table.headers %}<th>{{ header }}</th>{% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in table.rows %}
+              <tr>{% for value in row %}<td>{{ value }}</td>{% endfor %}</tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  </main>
+</body>
+</html>

@@ -1,6 +1,5 @@
 """Generate the combined Codex and Claude usage report."""
 
-import html
 import json
 import shutil
 from datetime import datetime
@@ -9,6 +8,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import pandas as pd
+from jinja2 import Environment, PackageLoader, select_autoescape
 
 from .analysis import analyze_threads
 from .gather_session_data import convert_sessions
@@ -31,31 +31,6 @@ CHARTS = {
     "reasoning_vs_output_tokens.png": ("Reasoning tokens", "Reasoning volume and share of model output."),
     "top_tools.png": ("Most-used tools", "The most frequent tools for each source."),
 }
-
-BASE_CSS = """
-:root { color-scheme: light; --ink: #17202a; --muted: #667085; --line: #e4e7ec;
-  --paper: #fff; --wash: #f4f6f8; --accent: #3157d5; }
-* { box-sizing: border-box; }
-body { margin: 0; color: var(--ink); background: var(--wash); font: 15px/1.55 system-ui, sans-serif; }
-main { width: min(1440px, calc(100% - 32px)); margin: 0 auto; padding: 42px 0 72px; }
-h1, h2, h3 { line-height: 1.2; margin-top: 0; }
-h1 { font-size: clamp(30px, 5vw, 52px); letter-spacing: -.04em; margin-bottom: 10px; }
-h2 { margin: 42px 0 16px; font-size: 25px; }
-p { margin: 0; } .muted { color: var(--muted); }
-.panel, .card { background: var(--paper); border: 1px solid var(--line); border-radius: 14px; }
-.panel { padding: 20px; overflow: auto; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 26px; }
-.card { padding: 18px; } .card strong { display: block; font-size: 28px; }
-.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 16px; }
-.chart { padding: 14px; } .chart img { display: block; width: 100%; border-radius: 8px; }
-.chart h3 { margin: 12px 4px 3px; } .chart p { margin: 0 4px 4px; color: var(--muted); }
-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
-th, td { padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: left; }
-th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-tbody tr:hover { background: #f8f9fc; }
-a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
-@media (max-width: 640px) { main { width: min(100% - 20px, 1440px); padding-top: 24px; } }
-"""
 
 
 def discover_jsonl(path: Path) -> list[Path]:
@@ -86,19 +61,20 @@ def format_table_value(column: str, value: object) -> str:
     return format_value(value)
 
 
-def render_table(frame: pd.DataFrame, columns: list[str] | None = None) -> str:
+def format_table(frame: pd.DataFrame, columns: list[str] | None = None) -> dict:
     if columns is not None:
         columns = [column for column in columns if column in frame.columns]
         frame = frame[columns]
-    headers = "".join(f"<th>{html.escape(column.replace('_', ' '))}</th>" for column in frame.columns)
-    rows = []
-    for values in frame.itertuples(index=False, name=None):
-        cells = "".join(
-            f"<td>{html.escape(format_table_value(column, value))}</td>"
-            for column, value in zip(frame.columns, values, strict=True)
-        )
-        rows.append(f"<tr>{cells}</tr>")
-    return f"<table><thead><tr>{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+    return {
+        "headers": [column.replace("_", " ") for column in frame.columns],
+        "rows": [
+            [
+                format_table_value(column, value)
+                for column, value in zip(frame.columns, values, strict=True)
+            ]
+            for values in frame.itertuples(index=False, name=None)
+        ],
+    }
 
 
 def load_pricing_catalog(data_dir: Path) -> tuple[dict, str]:
@@ -225,25 +201,23 @@ def build_report(output_dir: Path, title: str) -> Path:
     all_summary = summary[summary["scope"].eq("all")].iloc[0]
     cards = [
         ("Threads", all_summary.get("threads")),
-        ("Cost in last 30 days", f"${last_30_days_cost:,.2f}" if not matched_calls.empty else "—"),
-        ("Cost month to date", f"${month_to_date_cost:,.2f}" if not matched_calls.empty else "—"),
         ("Median run", f"{format_value(all_summary.get('median_duration_seconds_per_run'))} s"),
         ("Tool calls / run", format_value(all_summary.get("avg_tool_calls_per_run"))),
         ("Estimated API cost", f"${estimated_cost:,.2f}" if not matched_costs.empty else "—"),
+        ("Cost in last 30 days", f"${last_30_days_cost:,.2f}" if not matched_calls.empty else "—"),
+        ("Cost month to date", f"${month_to_date_cost:,.2f}" if not matched_calls.empty else "—"),
     ]
-    cards_html = "".join(
-        f'<div class="card"><span class="muted">{html.escape(label)}</span><strong>{html.escape(format_value(value))}</strong></div>'
-        for label, value in cards
-    )
+    cards = [{"label": label, "value": format_value(value)} for label, value in cards]
 
-    chart_html = []
+    charts = []
     for filename, (heading, description) in CHARTS.items():
         if (data_dir / filename).exists():
-            url = f"data/{quote(filename)}"
-            chart_html.append(
-                f'<article class="panel chart"><a href="{url}" target="_blank" rel="noreferrer">'
-                f'<img src="{url}" alt="{html.escape(heading)}"></a>'
-                f'<h3>{html.escape(heading)}</h3><p>{html.escape(description)}</p></article>'
+            charts.append(
+                {
+                    "url": f"data/{quote(filename)}",
+                    "heading": heading,
+                    "description": description,
+                }
             )
 
     tables = []
@@ -256,40 +230,37 @@ def build_report(output_dir: Path, title: str) -> Path:
             frame = pd.read_csv(path)
             if sort_column in frame.columns:
                 frame = frame.sort_values(sort_column, ascending=False, na_position="last")
-            note = ""
-            if filename == "model_costs.csv":
-                unmatched_note = ""
-                if unmatched_models:
-                    unmatched_note = " Unmatched model IDs: " + ", ".join(unmatched_models) + "."
-                note = (
-                    f'<p class="muted" style="margin:0 0 14px">Estimated from the '
-                    f'<a href="https://models.dev" target="_blank" rel="noreferrer">{html.escape(pricing_source)}</a> '
-                    "using standard USD-per-million-token API rates. Subscription pricing, discounts, "
-                    f"batch pricing, and long-context tiers are not included.{html.escape(unmatched_note)}</p>"
-                )
-            tables.append(
-                f"<h2>{html.escape(heading)}</h2><div class=\"panel\">{note}{render_table(frame, columns)}</div>"
+            table = format_table(frame, columns)
+            table.update(
+                {
+                    "heading": heading,
+                    "pricing_source": pricing_source if filename == "model_costs.csv" else None,
+                    "unmatched_models": unmatched_models if filename == "model_costs.csv" else [],
+                }
             )
+            tables.append(table)
 
-    tables.append(
-        "<h2>Monthly costs</h2><div class=\"panel\">"
-        + render_table(
-            monthly_costs.sort_values("month", ascending=False),
-            ["month", "claude_cost_usd", "codex_cost_usd", "combined_cost_usd"],
-        )
-        + "</div>"
+    monthly_costs_table = format_table(
+        monthly_costs.sort_values("month", ascending=False),
+        ["month", "claude_cost_usd", "codex_cost_usd", "combined_cost_usd"],
     )
+    monthly_costs_table.update(
+        {"heading": "Monthly costs", "pricing_source": None, "unmatched_models": []}
+    )
+    tables.append(monthly_costs_table)
 
     generated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    document = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)}</title><style>{BASE_CSS}</style></head><body><main>
-<h1>{html.escape(title)}</h1>
-<p class="muted">Generated {html.escape(generated)} · metadata-only local report</p>
-<section class="cards">{cards_html}</section>
-<h2>Charts</h2><section class="charts">{''.join(chart_html)}</section>
-{''.join(tables)}
-</main></body></html>"""
+    environment = Environment(
+        loader=PackageLoader("agentrecap"),
+        autoescape=select_autoescape(["html"]),
+    )
+    document = environment.get_template("report.html").render(
+        title=title,
+        generated=generated,
+        cards=cards,
+        charts=charts,
+        tables=tables,
+    )
     index_path = output_dir / "index.html"
     index_path.write_text(document, encoding="utf-8", newline="\n")
     return index_path
