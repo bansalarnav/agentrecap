@@ -53,7 +53,8 @@ def main() -> None:
 
     try:
         should_open = input("Would you like to open it in the browser? (y/n) ")
-    except EOFError:
+    except (EOFError, KeyboardInterrupt):
+        print()
         return
     if should_open.strip().lower() in {"y", "yes"}:
         webbrowser.open(index_path.as_uri())
