@@ -53,6 +53,13 @@ def load_events(path: Path) -> pd.DataFrame:
         "cumulative_cached_input_tokens",
         "cumulative_reasoning_output_tokens",
         "model",
+        "message_id",
+        "request_id",
+        "speed",
+        "service_tier",
+        "inference_geo",
+        "usage_kind",
+        "reported_cost_usd",
     }
     missing = required - set(events.columns)
     if missing:
@@ -126,6 +133,13 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         "run_id",
         "timestamp",
         "model",
+        "message_id",
+        "request_id",
+        "usage_kind",
+        "speed",
+        "service_tier",
+        "inference_geo",
+        "usage_source",
         "served_input_tokens",
         "uncached_input_tokens",
         "cached_input_tokens",
@@ -137,6 +151,7 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         "reasoning_tokens_available",
         "non_reasoning_output_tokens",
         "reasoning_share_of_output",
+        "reported_cost_usd",
     ]
     call_frames = []
 
@@ -146,11 +161,68 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         .notna()
         .any(axis=1)
     ].copy()
-    duplicate_requests = (
-        claude_usage["request_id"].notna()
-        & claude_usage["request_id"].duplicated(keep="last")
-    )
-    claude_usage = claude_usage[~duplicate_requests].copy()
+    token_columns = [
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "cache_creation_input_tokens",
+    ]
+    survivors = []
+    exact_identity = {}
+    message_positions = {}
+    request_identity = {}
+    fallback_identity = {}
+    for index, row in claude_usage.iterrows():
+        message_id = row["message_id"] if pd.notna(row["message_id"]) else None
+        request_id = row["request_id"] if pd.notna(row["request_id"]) else None
+        position = exact_identity.get((message_id, request_id)) if message_id else None
+        if position is None and message_id:
+            for candidate_position in message_positions.get(message_id, []):
+                candidate = claude_usage.loc[survivors[candidate_position]]
+                if bool(row["is_sidechain"]) or bool(candidate["is_sidechain"]):
+                    position = candidate_position
+                    break
+        if position is None and message_id is None and request_id:
+            position = request_identity.get(request_id)
+        if position is None and message_id is None and request_id is None:
+            fingerprint = tuple(
+                row.get(column)
+                for column in ["thread_id", "timestamp", "model", "usage_kind", *token_columns]
+            )
+            position = fallback_identity.get(fingerprint)
+
+        if position is None:
+            position = len(survivors)
+            survivors.append(index)
+            if message_id:
+                message_positions.setdefault(message_id, []).append(position)
+            elif request_id:
+                request_identity[request_id] = position
+            else:
+                fallback_identity[fingerprint] = position
+        else:
+            existing = claude_usage.loc[survivors[position]]
+            row_score = (
+                not bool(row["is_sidechain"]),
+                sum(row[column] if pd.notna(row[column]) else 0 for column in token_columns),
+                row["speed"] != "unknown",
+                sum(pd.notna(row[column]) for column in token_columns),
+            )
+            existing_score = (
+                not bool(existing["is_sidechain"]),
+                sum(
+                    existing[column] if pd.notna(existing[column]) else 0
+                    for column in token_columns
+                ),
+                existing["speed"] != "unknown",
+                sum(pd.notna(existing[column]) for column in token_columns),
+            )
+            if row_score > existing_score:
+                survivors[position] = index
+        if message_id:
+            exact_identity[(message_id, request_id)] = position
+
+    claude_usage = claude_usage.loc[survivors].copy()
     claude_usage["uncached_input_tokens"] = claude_usage["input_tokens"].fillna(0)
     claude_usage["cached_input_tokens"] = claude_usage["cached_input_tokens"].fillna(0)
     claude_usage["cache_creation_input_tokens"] = claude_usage["cache_creation_input_tokens"].fillna(0)
@@ -166,10 +238,21 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         + claude_usage["cache_creation_input_tokens"]
     )
     claude_usage["output_tokens"] = claude_usage["output_tokens"].fillna(0)
+    claude_usage = claude_usage[
+        claude_usage[
+            [
+                "uncached_input_tokens",
+                "cached_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+            ]
+        ].gt(0).any(axis=1)
+    ].copy()
     claude_usage["reasoning_output_tokens"] = np.nan
     claude_usage["reasoning_tokens_available"] = False
     claude_usage["non_reasoning_output_tokens"] = np.nan
     claude_usage["reasoning_share_of_output"] = np.nan
+    claude_usage["usage_source"] = "request_usage"
     call_frames.append(claude_usage[columns])
 
     codex = events[
@@ -177,6 +260,17 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         & events[["cumulative_input_tokens", "cumulative_output_tokens"]].notna().any(axis=1)
     ].copy()
     codex = codex.sort_values(["thread_id", "event_index"], kind="stable")
+    codex = codex.drop_duplicates(
+        [
+            "thread_id",
+            "model",
+            "cumulative_input_tokens",
+            "cumulative_output_tokens",
+            "cumulative_cached_input_tokens",
+            "cumulative_reasoning_output_tokens",
+        ],
+        keep="first",
+    )
     cumulative_columns = {
         "cumulative_input_tokens": "served_input_tokens",
         "cumulative_output_tokens": "output_tokens",
@@ -207,7 +301,57 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
     codex["reasoning_share_of_output"] = safe_ratio(
         codex["reasoning_output_tokens"], codex["output_tokens"]
     )
+    codex["usage_source"] = "cumulative_ledger_delta"
     call_frames.append(codex[columns])
+
+    ledger_runs = set(codex["export_run_id"].dropna())
+    codex_snapshots = events[
+        events["source"].eq("codex")
+        & ~events["export_run_id"].isin(ledger_runs)
+        & events[["input_tokens", "output_tokens"]].notna().any(axis=1)
+    ].copy()
+    if not codex_snapshots.empty:
+        codex_snapshots = codex_snapshots.drop_duplicates(
+            [
+                "thread_id",
+                "export_run_id",
+                "model",
+                "input_tokens",
+                "output_tokens",
+                "cached_input_tokens",
+                "reasoning_output_tokens",
+            ],
+            keep="last",
+        )
+        codex_snapshots["served_input_tokens"] = codex_snapshots["input_tokens"].fillna(0)
+        codex_snapshots["cached_input_tokens"] = codex_snapshots["cached_input_tokens"].fillna(0)
+        codex_snapshots["uncached_input_tokens"] = (
+            codex_snapshots["served_input_tokens"] - codex_snapshots["cached_input_tokens"]
+        ).clip(lower=0)
+        for column in [
+            "cache_creation_input_tokens",
+            "cache_creation_5m_input_tokens",
+            "cache_creation_1h_input_tokens",
+        ]:
+            codex_snapshots[column] = 0.0
+        codex_snapshots["output_tokens"] = codex_snapshots["output_tokens"].fillna(0)
+        codex_snapshots["reasoning_tokens_available"] = codex_snapshots[
+            "reasoning_output_tokens"
+        ].notna()
+        codex_snapshots["non_reasoning_output_tokens"] = (
+            codex_snapshots["output_tokens"]
+            - codex_snapshots["reasoning_output_tokens"].fillna(0)
+        ).clip(lower=0)
+        codex_snapshots["reasoning_share_of_output"] = safe_ratio(
+            codex_snapshots["reasoning_output_tokens"], codex_snapshots["output_tokens"]
+        )
+        codex_snapshots = codex_snapshots[
+            codex_snapshots[
+                ["served_input_tokens", "output_tokens", "cached_input_tokens"]
+            ].gt(0).any(axis=1)
+        ].copy()
+        codex_snapshots["usage_source"] = "deduplicated_last_snapshot"
+        call_frames.append(codex_snapshots[columns])
 
     model_calls = pd.concat(call_frames, ignore_index=True)
     model_calls["cache_read_ratio"] = safe_ratio(
@@ -216,6 +360,11 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
     model_calls["cache_creation_ratio"] = safe_ratio(
         model_calls["cache_creation_input_tokens"], model_calls["served_input_tokens"]
     )
+    model_calls["unclassified_cache_creation_input_tokens"] = (
+        model_calls["cache_creation_input_tokens"]
+        - model_calls["cache_creation_5m_input_tokens"]
+        - model_calls["cache_creation_1h_input_tokens"]
+    ).clip(lower=0)
     return model_calls.sort_values("timestamp", kind="stable").reset_index(drop=True)
 
 
@@ -279,6 +428,11 @@ def build_tool_calls(events: pd.DataFrame) -> pd.DataFrame:
 def most_common_non_null(series: pd.Series):
     values = series.dropna()
     return values.mode().iloc[0] if not values.empty else None
+
+
+def combined_speed_status(series: pd.Series) -> str:
+    values = set(series.fillna("unknown"))
+    return next(iter(values)) if len(values) == 1 else "mixed"
 
 
 def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.DataFrame) -> pd.DataFrame:
@@ -478,6 +632,7 @@ def build_threads(
         output_tokens=("output_tokens", "sum"),
         reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
         reasoning_token_calls=("reasoning_tokens_available", "sum"),
+        speed_status=("speed", combined_speed_status),
     )
     tool_totals = tool_calls.groupby(["source", "thread_id"], as_index=False).agg(
         tool_calls=("thread_id", "size"),
@@ -508,6 +663,7 @@ def build_threads(
     ]
     threads[count_columns] = threads[count_columns].fillna(0).astype(int)
     threads[token_columns] = threads[token_columns].fillna(0)
+    threads["speed_status"] = threads["speed_status"].fillna("unknown")
     threads["cache_read_ratio"] = safe_ratio(threads["cached_input_tokens"], threads["served_input_tokens"])
     threads["cache_creation_ratio"] = safe_ratio(
         threads["cache_creation_input_tokens"], threads["served_input_tokens"]
@@ -684,6 +840,10 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
         cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
         cache_creation_5m_input_tokens=("cache_creation_5m_input_tokens", "sum"),
         cache_creation_1h_input_tokens=("cache_creation_1h_input_tokens", "sum"),
+        unclassified_cache_creation_input_tokens=(
+            "unclassified_cache_creation_input_tokens",
+            "sum",
+        ),
         output_tokens=("output_tokens", "sum"),
         reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
         reasoning_token_calls=("reasoning_tokens_available", "sum"),

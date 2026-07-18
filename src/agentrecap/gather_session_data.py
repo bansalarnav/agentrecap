@@ -24,6 +24,15 @@ def serialized_length(value: object) -> int | None:
     return len(json.dumps(value, ensure_ascii=False))
 
 
+def speed_status(speed: object, service_tier: object) -> str:
+    values = {str(value).lower() for value in (speed, service_tier) if value is not None}
+    if values & {"fast", "priority"}:
+        return "fast"
+    if values & {"standard", "default"}:
+        return "standard"
+    return "unknown"
+
+
 def discover_codex_jsonl(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
@@ -62,6 +71,7 @@ def convert_codex_thread(path: Path) -> list[dict]:
     is_sidechain = (isinstance(source, dict) and bool(source.get("subagent"))) or thread_source == "subagent"
     model = None
     reasoning_effort = None
+    service_tier = None
     tool_names_by_call_id = {}
     events = []
 
@@ -69,10 +79,21 @@ def convert_codex_thread(path: Path) -> list[dict]:
         record_type = record.get("type", "unknown")
         payload = record.get("payload") or {}
         payload_type = payload.get("type")
+        info = payload.get("info") or {}
 
         if record_type == "turn_context":
             model = payload.get("model")
             reasoning_effort = payload.get("effort")
+
+        record_service_tier = (
+            payload.get("service_tier")
+            or payload.get("serviceTier")
+            or (payload.get("thread_settings") or {}).get("service_tier")
+            or info.get("service_tier")
+            or info.get("serviceTier")
+        )
+        if record_service_tier is not None:
+            service_tier = record_service_tier
 
         event_id = anonymous_id_or_none("codex-event", payload.get("id") or payload.get("turn_id"))
         event_parent_id = None
@@ -98,7 +119,6 @@ def convert_codex_thread(path: Path) -> list[dict]:
             tool_name = tool_names_by_call_id.get(call_id)
 
         role = payload.get("role") if payload_type == "message" else None
-        info = payload.get("info") or {}
         usage = info.get("last_token_usage") or {}
         total_usage = info.get("total_token_usage") or {}
 
@@ -166,6 +186,7 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 "source_tool_assistant_id": None,
                 "prompt_id": None,
                 "request_id": None,
+                "message_id": None,
                 "tool_call_id": anonymous_id_or_none("codex-tool", call_id),
                 "role": role,
                 "event_type": event_type,
@@ -187,6 +208,10 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 "tool_event_stage": tool_event_stage,
                 "model": payload.get("model") or model,
                 "reasoning_effort": payload.get("reasoning_effort") or reasoning_effort,
+                "speed": speed_status(None, service_tier),
+                "service_tier": service_tier,
+                "inference_geo": None,
+                "usage_kind": "model_call" if usage or total_usage else None,
                 "tool_name": tool_name,
                 "success": success,
                 "status": status,
@@ -205,6 +230,7 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 "cumulative_cached_input_tokens": total_usage.get("cached_input_tokens"),
                 "cumulative_reasoning_output_tokens": total_usage.get("reasoning_output_tokens"),
                 "cumulative_total_tokens": total_usage.get("total_tokens"),
+                "reported_cost_usd": None,
                 "model_context_window": info.get("model_context_window") or payload.get("model_context_window"),
                 "text_length": serialized_length(content),
                 "tool_input_length": serialized_length(tool_input),
@@ -234,21 +260,36 @@ def convert_claude_thread(path: Path) -> list[dict]:
     events = []
 
     for record_index, record in enumerate(records):
-        record_type = record.get("type", "unknown")
-        message = record.get("message") or {}
+        usage_record = record
+        nested = (record.get("data") or {}).get("message") or {}
+        if (nested.get("message") or {}).get("usage"):
+            usage_record = nested
+
+        record_type = usage_record.get("type", record.get("type", "unknown"))
+        message = usage_record.get("message") or {}
         role = message.get("role") if record_type in {"user", "assistant"} else None
         model = message.get("model")
         usage = message.get("usage") or {}
         blocks = message.get("content")
-        event_id = anonymous_id_or_none("claude-event", record.get("uuid") or message.get("id"))
+        raw_message_id = message.get("id")
+        event_id = anonymous_id_or_none(
+            "claude-event", usage_record.get("uuid") or record.get("uuid") or raw_message_id
+        )
         parent_event_id = anonymous_id_or_none(
             "claude-event",
             record.get("parentUuid") or record.get("logicalParentUuid"),
         )
-        agent_id = anonymous_id_or_none("claude-agent", record.get("agentId") or record.get("attributionAgent"))
+        agent_id = anonymous_id_or_none(
+            "claude-agent",
+            usage_record.get("agentId")
+            or record.get("agentId")
+            or record.get("attributionAgent"),
+        )
         source_tool_assistant_id = anonymous_id_or_none("claude-event", record.get("sourceToolAssistantUUID"))
         prompt_id = anonymous_id_or_none("claude-prompt", record.get("promptId"))
-        request_id = anonymous_id_or_none("claude-request", record.get("requestId"))
+        request_id = anonymous_id_or_none(
+            "claude-request", usage_record.get("requestId") or record.get("requestId")
+        )
         if not isinstance(blocks, list) or not blocks:
             blocks = [None]
 
@@ -298,6 +339,10 @@ def convert_claude_thread(path: Path) -> list[dict]:
             cache_creation_1h_tokens = (
                 cache_creation.get("ephemeral_1h_input_tokens") if include_usage else None
             )
+            if include_usage and cache_creation_tokens is None and cache_creation:
+                cache_creation_tokens = (cache_creation_5m_tokens or 0) + (
+                    cache_creation_1h_tokens or 0
+                )
             total_tokens = None
             if include_usage:
                 total_tokens = sum(
@@ -314,17 +359,20 @@ def convert_claude_thread(path: Path) -> list[dict]:
                     "record_index": record_index,
                     "block_index": block_index,
                     "event_index": None,
-                    "timestamp": record.get("timestamp"),
+                    "timestamp": usage_record.get("timestamp") or record.get("timestamp"),
                     "event_id": event_id,
                     "parent_event_id": parent_event_id,
                     "parent_thread_id": None,
                     "child_thread_id": None,
                     "agent_id": agent_id,
                     "agent_role": None,
-                    "is_sidechain": record.get("isSidechain"),
+                    "is_sidechain": usage_record.get(
+                        "isSidechain", record.get("isSidechain")
+                    ),
                     "source_tool_assistant_id": source_tool_assistant_id,
                     "prompt_id": prompt_id,
                     "request_id": request_id,
+                    "message_id": anonymous_id_or_none("claude-message", raw_message_id),
                     "tool_call_id": anonymous_id_or_none("claude-tool", block.get("id") or block.get("tool_use_id")),
                     "role": role,
                     "event_type": event_type,
@@ -346,6 +394,10 @@ def convert_claude_thread(path: Path) -> list[dict]:
                     "tool_event_stage": tool_event_stage,
                     "model": model,
                     "reasoning_effort": None,
+                    "speed": speed_status(usage.get("speed"), usage.get("service_tier")),
+                    "service_tier": usage.get("service_tier"),
+                    "inference_geo": usage.get("inference_geo"),
+                    "usage_kind": "model_call" if include_usage else None,
                     "tool_name": tool_name,
                     "success": success,
                     "status": None,
@@ -364,10 +416,85 @@ def convert_claude_thread(path: Path) -> list[dict]:
                     "cumulative_cached_input_tokens": None,
                     "cumulative_reasoning_output_tokens": None,
                     "cumulative_total_tokens": None,
+                    "reported_cost_usd": (
+                        usage_record.get("costUSD", record.get("costUSD"))
+                        if include_usage
+                        else None
+                    ),
                     "model_context_window": None,
                     "text_length": serialized_length(text),
                     "tool_input_length": serialized_length(tool_input),
                     "tool_output_length": serialized_length(tool_output),
+                }
+            )
+
+        for iteration_index, iteration in enumerate(usage.get("iterations") or []):
+            if iteration.get("type") != "advisor_message":
+                continue
+            advisor_model = iteration.get("model") or record.get("advisorModel")
+            advisor_cache = iteration.get("cache_creation") or {}
+            advisor_5m = advisor_cache.get("ephemeral_5m_input_tokens")
+            advisor_1h = advisor_cache.get("ephemeral_1h_input_tokens")
+            advisor_creation = iteration.get("cache_creation_input_tokens")
+            if advisor_creation is None and advisor_cache:
+                advisor_creation = (advisor_5m or 0) + (advisor_1h or 0)
+            advisor_input = iteration.get("input_tokens")
+            advisor_output = iteration.get("output_tokens")
+            advisor_cached = iteration.get("cache_read_input_tokens")
+            advisor_identity = (
+                raw_message_id
+                or usage_record.get("uuid")
+                or record.get("uuid")
+                or f"record-{record_index}"
+            )
+            events.append(
+                {
+                    **{key: None for key in events[-1]},
+                    "thread_id": thread_id,
+                    "source": "claude",
+                    "run_id": run_id,
+                    "run_event_index": len(events),
+                    "record_index": record_index,
+                    "block_index": None,
+                    "event_index": None,
+                    "timestamp": usage_record.get("timestamp") or record.get("timestamp"),
+                    "event_id": anonymous_id_or_none(
+                        "claude-event", f"{advisor_identity}:advisor:{iteration_index}"
+                    ),
+                    "parent_event_id": event_id,
+                    "agent_id": agent_id,
+                    "is_sidechain": usage_record.get(
+                        "isSidechain", record.get("isSidechain")
+                    ),
+                    "request_id": request_id,
+                    "message_id": anonymous_id_or_none(
+                        "claude-message", f"{advisor_identity}:advisor:{iteration_index}"
+                    ),
+                    "event_type": "assistant.advisor_usage",
+                    "canonical_event_type": "other",
+                    "model": advisor_model,
+                    "speed": speed_status(
+                        iteration.get("speed"), iteration.get("service_tier")
+                    ),
+                    "service_tier": iteration.get("service_tier"),
+                    "inference_geo": iteration.get("inference_geo"),
+                    "usage_kind": "advisor_call",
+                    "input_tokens": advisor_input,
+                    "output_tokens": advisor_output,
+                    "cached_input_tokens": advisor_cached,
+                    "cache_creation_input_tokens": advisor_creation,
+                    "cache_creation_5m_input_tokens": advisor_5m,
+                    "cache_creation_1h_input_tokens": advisor_1h,
+                    "total_tokens": sum(
+                        value or 0
+                        for value in (
+                            advisor_input,
+                            advisor_output,
+                            advisor_cached,
+                            advisor_creation,
+                        )
+                    ),
+                    "reported_cost_usd": None,
                 }
             )
 
@@ -404,6 +531,18 @@ def convert_sessions(
                 events_df["run_event_index"],
                 strict=False,
             )
+        ]
+        call_speeds = events_df.loc[
+            events_df["usage_kind"].notna() & events_df["total_tokens"].fillna(0).gt(0),
+            ["source", "thread_id", "speed"],
+        ]
+        thread_speeds = {}
+        for key, group in call_speeds.groupby(["source", "thread_id"]):
+            values = set(group["speed"].fillna("unknown"))
+            thread_speeds[key] = next(iter(values)) if len(values) == 1 else "mixed"
+        events_df["thread_speed_status"] = [
+            thread_speeds.get((source, thread_id), "unknown")
+            for source, thread_id in zip(events_df["source"], events_df["thread_id"], strict=False)
         ]
 
     events_df.to_csv(output, index=False)

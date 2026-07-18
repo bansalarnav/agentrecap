@@ -41,8 +41,10 @@
           <p class="muted table-note">
             Estimated from the
             <a href="https://models.dev" target="_blank" rel="noreferrer">{{ table.pricing_source }}</a>
-            using standard USD-per-million-token API rates. Subscription pricing, discounts,
-            batch pricing, and long-context tiers are not included.
+            using per-request USD-per-million-token API rates, including logged fast mode,
+            cache categories, and model-specific long-context tiers when available. These are
+            API-equivalent estimates, not subscription or credit spend. Unknown historical speed
+            uses a marked standard-rate fallback; discounts and batch pricing are not included.
             {% if table.unmatched_models %}
               Unmatched model IDs: {{ table.unmatched_models | join(", ") }}.
             {% endif %}
