@@ -37,6 +37,7 @@ def main() -> None:
         parser.error(f"No JSONL transcripts found in {codex_input} or {claude_input}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    print("Analysing...")
     run_pipeline(codex_input, claude_input, output_dir)
     index_path = build_report(output_dir, args.title)
     print(f'Generated report at "{index_path}"')

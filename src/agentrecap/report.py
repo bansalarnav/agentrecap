@@ -160,16 +160,19 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
 
 def run_pipeline(codex_input: Path, claude_input: Path, output_dir: Path) -> None:
     data_dir = output_dir / "data"
+    parquet_path = data_dir / "threads.parquet"
     data_dir.mkdir(parents=True, exist_ok=True)
     for filename in CHARTS:
         (data_dir / filename).unlink(missing_ok=True)
     convert_sessions(
         codex_input,
         claude_input,
-        data_dir / "threads.parquet",
+        parquet_path,
         data_dir / "source_runs.parquet",
     )
-    analyze_threads(data_dir / "threads.parquet", data_dir)
+    print(f"Session data saved to {parquet_path}")
+    print("Generating Report...")
+    analyze_threads(parquet_path, data_dir)
 
 
 def build_report(output_dir: Path, title: str) -> Path:
@@ -251,4 +254,3 @@ def build_report(output_dir: Path, title: str) -> Path:
     index_path = output_dir / "index.html"
     index_path.write_text(document, encoding="utf-8", newline="\n")
     return index_path
-
