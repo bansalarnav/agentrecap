@@ -196,29 +196,21 @@ def make_plots(
     )
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    for source, group in runs.groupby("source"):
-        values = group["cache_read_ratio"].dropna()
-        axes[0].hist(
-            values,
-            bins=np.linspace(0, 1, 31),
-            alpha=0.55,
-            label=source,
-            color=SOURCE_COLORS.get(source),
-        )
-    axes[0].set(title="Run cache-read ratio", xlabel="Cached / served input", ylabel="Runs")
+    _draw_hist(axes[0], runs, "cache_read_ratio", np.linspace(0, 1, 31))
+    axes[0].set(
+        title="Run cache-read ratio",
+        xlabel="Cached / served input",
+        ylabel="Fraction of that source",
+    )
     axes[0].legend()
     axes[0].grid(alpha=0.2)
 
-    for source, group in threads.groupby("source"):
-        values = group["cache_read_ratio"].dropna()
-        axes[1].hist(
-            values,
-            bins=np.linspace(0, 1, 31),
-            alpha=0.55,
-            label=source,
-            color=SOURCE_COLORS.get(source),
-        )
-    axes[1].set(title="Thread cache-read ratio", xlabel="Cached / served input", ylabel="Threads")
+    _draw_hist(axes[1], threads, "cache_read_ratio", np.linspace(0, 1, 31))
+    axes[1].set(
+        title="Thread cache-read ratio",
+        xlabel="Cached / served input",
+        ylabel="Fraction of that source",
+    )
     axes[1].legend()
     axes[1].grid(alpha=0.2)
     fig.tight_layout()

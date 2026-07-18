@@ -18,10 +18,9 @@ agentrecap \
 
 The report includes:
 
-- Headline thread, run, event, duration, tool-call, and token metrics.
+- Headline recent, month-to-date, and all-time estimated API costs alongside usage metrics.
 - Codex and Claude comparisons.
-- Model usage, cache ratios, reasoning-token metrics, and estimated API costs.
-- Tool usage and failure ratios.
+- Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
 - Human-readable, metadata-only CSV files under the report's `data/` directory.
 

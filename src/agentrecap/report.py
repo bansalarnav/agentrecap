@@ -81,7 +81,7 @@ def format_value(value: object) -> str:
 def format_table_value(column: str, value: object) -> str:
     if pd.isna(value):
         return "—"
-    if column == "estimated_cost_usd":
+    if column == "estimated_cost_usd" or column.endswith("_cost_usd"):
         return f"${float(value):,.2f}"
     return format_value(value)
 
@@ -189,12 +189,44 @@ def build_report(output_dir: Path, title: str) -> Path:
         model_costs["pricing_status"].eq("unmatched"), "model"
     ].astype(str).tolist()
 
+    model_calls = pd.read_csv(data_dir / "model_calls.csv")
+    model_calls["timestamp"] = pd.to_datetime(model_calls["timestamp"], utc=True, errors="coerce")
+    model_calls["model"] = model_calls["model"].fillna("unknown")
+    model_calls["calls"] = 1
+    priced_calls = add_model_costs(model_calls, pricing_catalog)
+    matched_calls = priced_calls[priced_calls["pricing_status"].eq("matched")].copy()
+
+    now = pd.Timestamp.now(tz=datetime.now().astimezone().tzinfo)
+    local_timestamps = matched_calls["timestamp"].dt.tz_convert(now.tzinfo)
+    last_30_days_cost = matched_calls.loc[
+        local_timestamps.ge(now - pd.Timedelta(days=30)), "estimated_cost_usd"
+    ].sum()
+    month_start = now.normalize().replace(day=1)
+    month_to_date_cost = matched_calls.loc[
+        local_timestamps.ge(month_start), "estimated_cost_usd"
+    ].sum()
+
+    matched_calls["month"] = local_timestamps.dt.strftime("%Y-%m")
+    monthly_costs = matched_calls.groupby(["month", "source"])["estimated_cost_usd"].sum().unstack(
+        fill_value=0
+    )
+    monthly_costs = monthly_costs.reindex(columns=["claude", "codex"], fill_value=0)
+    monthly_costs["combined"] = monthly_costs.sum(axis=1)
+    monthly_costs = monthly_costs.rename(
+        columns={
+            "claude": "claude_cost_usd",
+            "codex": "codex_cost_usd",
+            "combined": "combined_cost_usd",
+        }
+    ).reset_index()
+    monthly_costs.to_csv(data_dir / "monthly_costs.csv", index=False)
+
     summary = pd.read_csv(data_dir / "summary.csv")
     all_summary = summary[summary["scope"].eq("all")].iloc[0]
     cards = [
         ("Threads", all_summary.get("threads")),
-        ("Runs", all_summary.get("runs")),
-        ("Events", all_summary.get("events")),
+        ("Cost in last 30 days", f"${last_30_days_cost:,.2f}" if not matched_calls.empty else "—"),
+        ("Cost month to date", f"${month_to_date_cost:,.2f}" if not matched_calls.empty else "—"),
         ("Median run", f"{format_value(all_summary.get('median_duration_seconds_per_run'))} s"),
         ("Tool calls / run", format_value(all_summary.get("avg_tool_calls_per_run"))),
         ("Estimated API cost", f"${estimated_cost:,.2f}" if not matched_costs.empty else "—"),
@@ -217,9 +249,7 @@ def build_report(output_dir: Path, title: str) -> Path:
     tables = []
     for heading, filename, columns, sort_column in [
         ("Source comparison", "summary.csv", ["scope", "threads", "runs", "avg_duration_seconds_per_run", "avg_tool_calls_per_run", "avg_served_input_tokens_per_run", "avg_output_tokens_per_run", "aggregate_cache_read_ratio"], "runs"),
-        ("Models", "model_costs.csv", ["source", "model", "estimated_cost_usd", "calls", "served_input_tokens", "output_tokens", "cache_read_ratio", "reasoning_share_of_output", "pricing_status"], "estimated_cost_usd"),
-        ("Tool usage", "tool_usage.csv", ["source", "tool_name", "calls", "known_outcomes", "failures", "failure_ratio"], "calls"),
-        ("Data quality", "data_quality.csv", None, "value"),
+        ("Models", "model_costs.csv", ["source", "model", "estimated_cost_usd", "calls", "served_input_tokens", "output_tokens", "cache_read_ratio", "reasoning_share_of_output"], "estimated_cost_usd"),
     ]:
         path = data_dir / filename
         if path.exists():
@@ -240,6 +270,15 @@ def build_report(output_dir: Path, title: str) -> Path:
             tables.append(
                 f"<h2>{html.escape(heading)}</h2><div class=\"panel\">{note}{render_table(frame, columns)}</div>"
             )
+
+    tables.append(
+        "<h2>Monthly costs</h2><div class=\"panel\">"
+        + render_table(
+            monthly_costs.sort_values("month", ascending=False),
+            ["month", "claude_cost_usd", "codex_cost_usd", "combined_cost_usd"],
+        )
+        + "</div>"
+    )
 
     generated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     document = f"""<!doctype html>
