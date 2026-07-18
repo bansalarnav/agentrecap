@@ -13,9 +13,13 @@ If you do not have `uvx` or `pipx` installed, clone the repository and run it wi
 ```bash
 git clone https://github.com/bansalarnav/agentrecap.git
 cd agentrecap
-python3 -m pip install .
-python3 -m agentrecap.cli
+python3 -m venv .venv && .venv/bin/pip install .
+.venv/bin/python -m agentrecap.cli
 ```
+
+The local virtual environment keeps `agentrecap` and its dependencies separate from your existing Python installation.
+
+## Overview
 
 `agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
 
