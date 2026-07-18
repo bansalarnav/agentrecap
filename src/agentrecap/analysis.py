@@ -25,7 +25,7 @@ def percentile(series: pd.Series, value: float) -> float:
 
 
 def load_events(path: Path) -> pd.DataFrame:
-    events = pd.read_parquet(path)
+    events = pd.read_csv(path)
     required = {
         "thread_id",
         "source",
@@ -54,7 +54,7 @@ def load_events(path: Path) -> pd.DataFrame:
     }
     missing = required - set(events.columns)
     if missing:
-        raise ValueError(f"Parquet is missing required columns: {sorted(missing)}")
+        raise ValueError(f"CSV is missing required columns: {sorted(missing)}")
 
     events = events.copy()
     if "run_id" in events.columns:
@@ -723,8 +723,8 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path(__file__).parent / "sanitized" / "threads.parquet",
-        help="Input event parquet",
+        default=Path(__file__).parent / "sanitized" / "threads.csv",
+        help="Input event CSV",
     )
     parser.add_argument(
         "--output-dir",

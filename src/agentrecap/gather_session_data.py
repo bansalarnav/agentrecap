@@ -24,29 +24,7 @@ def serialized_length(value: object) -> int | None:
     return len(json.dumps(value, ensure_ascii=False))
 
 
-def run_summary(
-    *,
-    source: str,
-    path: Path,
-    thread_id: str,
-    records: list[dict],
-    event_count: int,
-) -> dict:
-    timestamps = [record.get("timestamp") for record in records if record.get("timestamp")]
-    return {
-        "run_id": anonymous_id(f"{source}-run:{path}"),
-        "source": source,
-        "thread_id": thread_id,
-        "path_id": anonymous_id(f"{source}-path:{path}"),
-        "file_name": path.name,
-        "record_count": len(records),
-        "event_count": event_count,
-        "first_timestamp": min(timestamps) if timestamps else None,
-        "last_timestamp": max(timestamps) if timestamps else None,
-    }
-
-
-def convert_codex_thread(path: Path) -> tuple[list[dict], dict | None]:
+def convert_codex_thread(path: Path) -> list[dict]:
     records = []
     with path.open(encoding="utf-8", errors="replace") as file:
         for line in file:
@@ -56,7 +34,7 @@ def convert_codex_thread(path: Path) -> tuple[list[dict], dict | None]:
                 continue
 
     if not records:
-        return [], None
+        return []
 
     meta = next((r.get("payload", {}) for r in records if r.get("type") == "session_meta"), {})
     raw_thread_id = str(meta.get("id") or meta.get("session_id") or path.name)
@@ -216,10 +194,10 @@ def convert_codex_thread(path: Path) -> tuple[list[dict], dict | None]:
             }
         )
 
-    return events, run_summary(source="codex", path=path, thread_id=thread_id, records=records, event_count=len(events))
+    return events
 
 
-def convert_claude_thread(path: Path) -> tuple[list[dict], dict | None]:
+def convert_claude_thread(path: Path) -> list[dict]:
     records = []
     with path.open(encoding="utf-8", errors="replace") as file:
         for line in file:
@@ -229,7 +207,7 @@ def convert_claude_thread(path: Path) -> tuple[list[dict], dict | None]:
                 continue
 
     if not records:
-        return [], None
+        return []
 
     raw_thread_id = str(next((r.get("sessionId") for r in records if r.get("sessionId")), path.name))
     thread_id = anonymous_id(f"claude:{raw_thread_id}")
@@ -366,33 +344,24 @@ def convert_claude_thread(path: Path) -> tuple[list[dict], dict | None]:
                 }
             )
 
-    return events, run_summary(source="claude", path=path, thread_id=thread_id, records=records, event_count=len(events))
+    return events
 
 
 def convert_sessions(
     codex_input: Path,
     claude_input: Path,
     output: Path,
-    runs_output: Path,
 ) -> dict[str, int]:
     all_events = []
-    runs = []
     codex_paths = [codex_input] if codex_input.is_file() else sorted(codex_input.rglob("*.jsonl"))
     claude_paths = [claude_input] if claude_input.is_file() else sorted(claude_input.rglob("*.jsonl"))
 
     for path in codex_paths:
-        events, run = convert_codex_thread(path)
-        all_events.extend(events)
-        if run:
-            runs.append(run)
+        all_events.extend(convert_codex_thread(path))
     for path in claude_paths:
-        events, run = convert_claude_thread(path)
-        all_events.extend(events)
-        if run:
-            runs.append(run)
+        all_events.extend(convert_claude_thread(path))
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    runs_output.parent.mkdir(parents=True, exist_ok=True)
     events_df = pd.DataFrame(all_events)
     if not events_df.empty:
         events_df = events_df.sort_values(
@@ -410,27 +379,16 @@ def convert_sessions(
             )
         ]
 
-    runs_df = pd.DataFrame(runs)
-    if not runs_df.empty and not events_df.empty:
-        run_bounds = (
-            events_df.groupby("run_id")["event_index"]
-            .agg(first_event_index="min", last_event_index="max")
-            .reset_index()
-        )
-        runs_df = runs_df.merge(run_bounds, on="run_id", how="left")
-
-    events_df.to_parquet(output, index=False)
-    runs_df.to_parquet(runs_output, index=False)
+    events_df.to_csv(output, index=False)
     return {
         "codex_threads": len(codex_paths),
         "claude_threads": len(claude_paths),
         "events": len(all_events),
-        "run_summaries": len(runs),
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert Codex and Claude Code sessions to one metadata-only Parquet file.")
+    parser = argparse.ArgumentParser(description="Convert Codex and Claude Code sessions to a metadata-only CSV file.")
     parser.add_argument(
         "--codex-input",
         type=Path,
@@ -443,16 +401,14 @@ def main() -> None:
         default=Path.home() / ".claude" / "projects",
         help="Claude Code projects directory",
     )
-    parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.parquet")
-    parser.add_argument("--runs-output", type=Path, default=Path("sanitized") / "runs.parquet")
+    parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.csv")
     args = parser.parse_args()
 
-    result = convert_sessions(args.codex_input, args.claude_input, args.output, args.runs_output)
+    result = convert_sessions(args.codex_input, args.claude_input, args.output)
     print(
         f"Converted {result['codex_threads']} Codex threads and {result['claude_threads']} Claude threads "
         f"({result['events']} events) into {args.output}"
     )
-    print(f"Wrote {result['run_summaries']} run summaries into {args.runs_output}")
 
 
 if __name__ == "__main__":
