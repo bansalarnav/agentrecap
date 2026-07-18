@@ -36,6 +36,7 @@
     {% for table in tables %}
       <h2>{{ table.heading }}</h2>
       <div class="panel">
+        {% if table.note %}<p class="muted table-note">{{ table.note }}</p>{% endif %}
         {% if table.pricing_source %}
           <p class="muted table-note">
             Estimated from the

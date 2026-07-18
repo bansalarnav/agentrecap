@@ -24,6 +24,22 @@ def serialized_length(value: object) -> int | None:
     return len(json.dumps(value, ensure_ascii=False))
 
 
+def discover_codex_jsonl(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if not path.exists():
+        return []
+    sessions_dir = path / "sessions"
+    if not sessions_dir.is_dir():
+        return sorted(path.rglob("*.jsonl"))
+
+    paths = list(sessions_dir.rglob("*.jsonl"))
+    archived_dir = path / "archived_sessions"
+    if archived_dir.is_dir():
+        paths.extend(archived_dir.rglob("*.jsonl"))
+    return sorted(paths)
+
+
 def convert_codex_thread(path: Path) -> list[dict]:
     records = []
     with path.open(encoding="utf-8", errors="replace") as file:
@@ -180,6 +196,8 @@ def convert_codex_thread(path: Path) -> list[dict]:
                 "output_tokens": usage.get("output_tokens"),
                 "cached_input_tokens": usage.get("cached_input_tokens"),
                 "cache_creation_input_tokens": None,
+                "cache_creation_5m_input_tokens": None,
+                "cache_creation_1h_input_tokens": None,
                 "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
                 "total_tokens": usage.get("total_tokens"),
                 "cumulative_input_tokens": total_usage.get("input_tokens"),
@@ -273,6 +291,13 @@ def convert_claude_thread(path: Path) -> list[dict]:
             output_tokens = usage.get("output_tokens") if include_usage else None
             cached_tokens = usage.get("cache_read_input_tokens") if include_usage else None
             cache_creation_tokens = usage.get("cache_creation_input_tokens") if include_usage else None
+            cache_creation = usage.get("cache_creation") or {}
+            cache_creation_5m_tokens = (
+                cache_creation.get("ephemeral_5m_input_tokens") if include_usage else None
+            )
+            cache_creation_1h_tokens = (
+                cache_creation.get("ephemeral_1h_input_tokens") if include_usage else None
+            )
             total_tokens = None
             if include_usage:
                 total_tokens = sum(
@@ -330,6 +355,8 @@ def convert_claude_thread(path: Path) -> list[dict]:
                     "output_tokens": output_tokens,
                     "cached_input_tokens": cached_tokens,
                     "cache_creation_input_tokens": cache_creation_tokens,
+                    "cache_creation_5m_input_tokens": cache_creation_5m_tokens,
+                    "cache_creation_1h_input_tokens": cache_creation_1h_tokens,
                     "reasoning_output_tokens": None,
                     "total_tokens": total_tokens,
                     "cumulative_input_tokens": None,
@@ -353,7 +380,7 @@ def convert_sessions(
     output: Path,
 ) -> dict[str, int]:
     all_events = []
-    codex_paths = [codex_input] if codex_input.is_file() else sorted(codex_input.rglob("*.jsonl"))
+    codex_paths = discover_codex_jsonl(codex_input)
     claude_paths = [claude_input] if claude_input.is_file() else sorted(claude_input.rglob("*.jsonl"))
 
     for path in codex_paths:
@@ -392,8 +419,8 @@ def main() -> None:
     parser.add_argument(
         "--codex-input",
         type=Path,
-        default=Path.home() / ".codex" / "sessions",
-        help="Codex sessions directory",
+        default=Path.home() / ".codex",
+        help="Codex home directory, including active and archived sessions",
     )
     parser.add_argument(
         "--claude-input",

@@ -108,6 +108,8 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
             output_price = cost.get("output")
             cache_read_price = cost.get("cache_read", input_price)
             cache_write_price = cost.get("cache_write", input_price)
+            cache_write_5m_price = cost.get("cache_write_5m", cache_write_price)
+            cache_write_1h_price = cost.get("cache_write_1h", input_price * 2)
             reasoning_price = cost.get("reasoning", output_price)
             reasoning_tokens = row.get("reasoning_output_tokens")
             reasoning_tokens = 0 if pd.isna(reasoning_tokens) else reasoning_tokens
@@ -120,11 +122,28 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
                     - row["cache_creation_input_tokens"],
                     0,
                 )
+            cache_creation_tokens = row["cache_creation_input_tokens"]
+            cache_creation_5m_tokens = row.get("cache_creation_5m_input_tokens", 0)
+            cache_creation_1h_tokens = row.get("cache_creation_1h_input_tokens", 0)
+            cache_creation_5m_tokens = (
+                0 if pd.isna(cache_creation_5m_tokens) else cache_creation_5m_tokens
+            )
+            cache_creation_1h_tokens = (
+                0 if pd.isna(cache_creation_1h_tokens) else cache_creation_1h_tokens
+            )
+            unclassified_cache_creation_tokens = max(
+                cache_creation_tokens
+                - cache_creation_5m_tokens
+                - cache_creation_1h_tokens,
+                0,
+            )
 
             row["estimated_cost_usd"] = (
                 uncached_input_tokens * input_price
                 + row["cached_input_tokens"] * cache_read_price
-                + row["cache_creation_input_tokens"] * cache_write_price
+                + unclassified_cache_creation_tokens * cache_write_price
+                + cache_creation_5m_tokens * cache_write_5m_price
+                + cache_creation_1h_tokens * cache_write_1h_price
                 + non_reasoning_tokens * output_price
                 + reasoning_tokens * reasoning_price
             ) / 1_000_000
@@ -245,7 +264,11 @@ def build_report(output_dir: Path, title: str) -> Path:
         ["month", "claude_cost_usd", "codex_cost_usd", "combined_cost_usd"],
     )
     monthly_costs_table.update(
-        {"heading": "Monthly costs", "pricing_source": None, "unmatched_models": []}
+        {
+            "heading": "Monthly costs",
+            "pricing_source": None,
+            "unmatched_models": [],
+        }
     )
     tables.append(monthly_costs_table)
 

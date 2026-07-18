@@ -5,6 +5,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+from .gather_session_data import discover_codex_jsonl
 from .report import build_report, discover_jsonl, run_pipeline
 
 
@@ -18,7 +19,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Convert Codex and Claude sessions, analyze them, and create an offline HTML report."
     )
-    parser.add_argument("--codex-input", type=Path, default=Path.home() / ".codex" / "sessions")
+    parser.add_argument(
+        "--codex-input",
+        type=Path,
+        default=Path.home() / ".codex",
+        help="Codex home directory, including active and archived sessions",
+    )
     parser.add_argument("--claude-input", type=Path, default=Path.home() / ".claude" / "projects")
     parser.add_argument(
         "--output-dir",
@@ -33,7 +39,7 @@ def main() -> None:
     codex_input = args.codex_input.expanduser().resolve()
     claude_input = args.claude_input.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
-    if not discover_jsonl(codex_input) and not discover_jsonl(claude_input):
+    if not discover_codex_jsonl(codex_input) and not discover_jsonl(claude_input):
         parser.error(f"No JSONL transcripts found in {codex_input} or {claude_input}")
 
     output_dir.mkdir(parents=True, exist_ok=True)

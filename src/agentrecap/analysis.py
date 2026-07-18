@@ -25,7 +25,7 @@ def percentile(series: pd.Series, value: float) -> float:
 
 
 def load_events(path: Path) -> pd.DataFrame:
-    events = pd.read_csv(path)
+    events = pd.read_csv(path, low_memory=False)
     required = {
         "thread_id",
         "source",
@@ -45,6 +45,8 @@ def load_events(path: Path) -> pd.DataFrame:
         "output_tokens",
         "cached_input_tokens",
         "cache_creation_input_tokens",
+        "cache_creation_5m_input_tokens",
+        "cache_creation_1h_input_tokens",
         "reasoning_output_tokens",
         "cumulative_input_tokens",
         "cumulative_output_tokens",
@@ -128,6 +130,8 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         "uncached_input_tokens",
         "cached_input_tokens",
         "cache_creation_input_tokens",
+        "cache_creation_5m_input_tokens",
+        "cache_creation_1h_input_tokens",
         "output_tokens",
         "reasoning_output_tokens",
         "reasoning_tokens_available",
@@ -142,9 +146,20 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         .notna()
         .any(axis=1)
     ].copy()
+    duplicate_requests = (
+        claude_usage["request_id"].notna()
+        & claude_usage["request_id"].duplicated(keep="last")
+    )
+    claude_usage = claude_usage[~duplicate_requests].copy()
     claude_usage["uncached_input_tokens"] = claude_usage["input_tokens"].fillna(0)
     claude_usage["cached_input_tokens"] = claude_usage["cached_input_tokens"].fillna(0)
     claude_usage["cache_creation_input_tokens"] = claude_usage["cache_creation_input_tokens"].fillna(0)
+    claude_usage["cache_creation_5m_input_tokens"] = claude_usage[
+        "cache_creation_5m_input_tokens"
+    ].fillna(0)
+    claude_usage["cache_creation_1h_input_tokens"] = claude_usage[
+        "cache_creation_1h_input_tokens"
+    ].fillna(0)
     claude_usage["served_input_tokens"] = (
         claude_usage["uncached_input_tokens"]
         + claude_usage["cached_input_tokens"]
@@ -180,6 +195,8 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         codex[["served_input_tokens", "output_tokens", "cached_input_tokens"]].gt(0).any(axis=1)
     ].copy()
     codex["cache_creation_input_tokens"] = 0.0
+    codex["cache_creation_5m_input_tokens"] = 0.0
+    codex["cache_creation_1h_input_tokens"] = 0.0
     codex["uncached_input_tokens"] = (
         codex["served_input_tokens"] - codex["cached_input_tokens"]
     ).clip(lower=0)
@@ -336,6 +353,8 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         uncached_input_tokens=("uncached_input_tokens", "sum"),
         cached_input_tokens=("cached_input_tokens", "sum"),
         cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
+        cache_creation_5m_input_tokens=("cache_creation_5m_input_tokens", "sum"),
+        cache_creation_1h_input_tokens=("cache_creation_1h_input_tokens", "sum"),
         output_tokens=("output_tokens", "sum"),
         reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
         reasoning_token_calls=("reasoning_tokens_available", "sum"),
@@ -360,6 +379,8 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         "uncached_input_tokens",
         "cached_input_tokens",
         "cache_creation_input_tokens",
+        "cache_creation_5m_input_tokens",
+        "cache_creation_1h_input_tokens",
         "output_tokens",
     ]
     runs[count_columns] = runs[count_columns].fillna(0).astype(int)
@@ -452,6 +473,8 @@ def build_threads(
         uncached_input_tokens=("uncached_input_tokens", "sum"),
         cached_input_tokens=("cached_input_tokens", "sum"),
         cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
+        cache_creation_5m_input_tokens=("cache_creation_5m_input_tokens", "sum"),
+        cache_creation_1h_input_tokens=("cache_creation_1h_input_tokens", "sum"),
         output_tokens=("output_tokens", "sum"),
         reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
         reasoning_token_calls=("reasoning_tokens_available", "sum"),
@@ -479,6 +502,8 @@ def build_threads(
         "uncached_input_tokens",
         "cached_input_tokens",
         "cache_creation_input_tokens",
+        "cache_creation_5m_input_tokens",
+        "cache_creation_1h_input_tokens",
         "output_tokens",
     ]
     threads[count_columns] = threads[count_columns].fillna(0).astype(int)
@@ -644,7 +669,7 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
     summary.to_csv(output_dir / "summary.csv", index=False)
     distributions.to_csv(output_dir / "distribution_summary.csv", index=False)
     runs.to_csv(output_dir / "runs.csv", index=False)
-    threads.to_csv(output_dir / "threads.csv", index=False)
+    threads.to_csv(output_dir / "thread_summary.csv", index=False)
     response_gaps.to_csv(output_dir / "response_gaps.csv", index=False)
     model_calls.to_csv(output_dir / "model_calls.csv", index=False)
     tool_calls.to_csv(output_dir / "tool_calls.csv", index=False)
@@ -657,6 +682,8 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
         uncached_input_tokens=("uncached_input_tokens", "sum"),
         cached_input_tokens=("cached_input_tokens", "sum"),
         cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
+        cache_creation_5m_input_tokens=("cache_creation_5m_input_tokens", "sum"),
+        cache_creation_1h_input_tokens=("cache_creation_1h_input_tokens", "sum"),
         output_tokens=("output_tokens", "sum"),
         reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
         reasoning_token_calls=("reasoning_tokens_available", "sum"),
