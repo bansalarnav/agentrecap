@@ -1,4 +1,4 @@
-"""Generate the combined Codex and Claude usage report."""
+"""Generate the combined coding-agent usage report."""
 
 import json
 import shutil
@@ -87,9 +87,10 @@ def load_pricing_catalog(data_dir: Path) -> tuple[dict, str]:
 
 def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
     rows = []
-    provider_by_source = {"codex": "openai", "claude": "anthropic"}
     for row in model_usage.to_dict("records"):
-        provider_id = provider_by_source.get(row["source"])
+        provider_id = row.get("provider")
+        if pd.isna(provider_id):
+            provider_id = None
         model = catalog.get(provider_id, {}).get("models", {}).get(str(row["model"]))
         cost = dict(model.get("cost") or {}) if model else None
         row["pricing_provider"] = provider_id
@@ -273,14 +274,10 @@ def build_report(output_dir: Path, title: str) -> Path:
     monthly_costs = matched_calls.groupby(["month", "source"])["estimated_cost_usd"].sum().unstack(
         fill_value=0
     )
-    monthly_costs = monthly_costs.reindex(columns=["claude", "codex"], fill_value=0)
-    monthly_costs["combined"] = monthly_costs.sum(axis=1)
+    cost_sources = sorted(monthly_costs.columns)
+    monthly_costs["combined_cost_usd"] = monthly_costs.sum(axis=1)
     monthly_costs = monthly_costs.rename(
-        columns={
-            "claude": "claude_cost_usd",
-            "codex": "codex_cost_usd",
-            "combined": "combined_cost_usd",
-        }
+        columns={source: f"{source}_cost_usd" for source in cost_sources}
     ).reset_index()
     monthly_costs.to_csv(data_dir / "monthly_costs.csv", index=False)
 
@@ -329,7 +326,7 @@ def build_report(output_dir: Path, title: str) -> Path:
 
     monthly_costs_table = format_table(
         monthly_costs.sort_values("month", ascending=False),
-        ["month", "claude_cost_usd", "codex_cost_usd", "combined_cost_usd"],
+        ["month", *[f"{source}_cost_usd" for source in cost_sources], "combined_cost_usd"],
     )
     monthly_costs_table.update(
         {

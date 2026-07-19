@@ -16,23 +16,27 @@ def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
         adapter = ADAPTERS[source]
         paths = adapter.discover_sessions(input_path)
         thread_counts[source] = len(paths)
+        source_events = []
         for path in paths:
-            all_events.extend(adapter.convert_thread(path))
+            source_events.extend(adapter.convert_thread(path))
+        # Canonical-usage marking needs every session of a source at once:
+        # resumed/forked sessions duplicate calls across files.
+        all_events.extend(adapter.finalize_events(source_events))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     events_df = pd.DataFrame(all_events)
     if not events_df.empty:
         events_df = events_df.sort_values(
-            ["source", "thread_id", "timestamp", "run_id", "run_event_index"],
+            ["source", "thread_id", "timestamp", "file_id", "file_event_index"],
             na_position="last",
         ).reset_index(drop=True)
         events_df["event_index"] = events_df.groupby(["source", "thread_id"]).cumcount()
         events_df["row_id"] = [
-            anonymous_id(f"row:{source}:{run_id}:{run_event_index}")
-            for source, run_id, run_event_index in zip(
+            anonymous_id(f"row:{source}:{file_id}:{file_event_index}")
+            for source, file_id, file_event_index in zip(
                 events_df["source"],
-                events_df["run_id"],
-                events_df["run_event_index"],
+                events_df["file_id"],
+                events_df["file_event_index"],
                 strict=False,
             )
         ]

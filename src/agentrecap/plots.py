@@ -10,10 +10,26 @@ import numpy as np
 import pandas as pd
 
 
-SOURCE_COLORS = {"codex": "tab:blue", "claude": "tab:orange"}
+PALETTE = [
+    "tab:blue",
+    "tab:orange",
+    "tab:green",
+    "tab:red",
+    "tab:purple",
+    "tab:brown",
+    "tab:pink",
+    "tab:olive",
+    "tab:cyan",
+]
 
 
-def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, log_x=False):
+def assign_source_colors(sources) -> dict:
+    """Stable color per source, assigned alphabetically so every chart in a
+    report uses the same mapping regardless of which sources are present."""
+    return {source: PALETTE[i % len(PALETTE)] for i, source in enumerate(sorted(sources))}
+
+
+def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, colors: dict, log_x=False):
     """Empirical CDF per source. Complements the histograms: the histogram shows
     distribution shape, the ECDF makes percentiles and cross-source stochastic
     dominance easy to read off directly.
@@ -29,7 +45,7 @@ def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: P
             style = (
                 {"color": "black", "linestyle": "--", "linewidth": 1.5}
                 if source == "all"
-                else {"color": SOURCE_COLORS.get(source)}
+                else {"color": colors.get(source)}
             )
             ax.plot(values, np.arange(1, len(values) + 1) / len(values), label=source, **style)
     if log_x:
@@ -45,7 +61,7 @@ def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: P
     plt.close(fig)
 
 
-def _draw_hist(ax, frame, column, bins, clip_upper=None, log_x=False):
+def _draw_hist(ax, frame, column, bins, colors, clip_upper=None, log_x=False):
     """Overlay a per-source histogram normalized to each source's own fraction.
 
     Sources differ hugely in sample size (e.g. codex has ~10x claude's runs), so
@@ -68,12 +84,12 @@ def _draw_hist(ax, frame, column, bins, clip_upper=None, log_x=False):
             weights=weights,
             alpha=0.55,
             label=source,
-            color=SOURCE_COLORS.get(source),
+            color=colors.get(source),
         )
 
 
 def plot_count_hist(
-    frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path
+    frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, colors: dict
 ):
     """Histogram for small-integer count distributions, grouped by source.
 
@@ -88,7 +104,7 @@ def plot_count_hist(
     bins = np.arange(0, upper + 2) - 0.5  # one integer per bin, centered on the tick
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    _draw_hist(ax, frame, column, bins, clip_upper=upper)
+    _draw_hist(ax, frame, column, bins, colors, clip_upper=upper)
     ax.set_title(title)
     ax.set_xlabel(f"{xlabel} (≥{upper} grouped into the last bin)")
     ax.set_ylabel("Fraction of that source")
@@ -102,7 +118,7 @@ def plot_count_hist(
 
 
 def plot_log_hist(
-    frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path
+    frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, colors: dict
 ):
     """Histogram for a positive, heavy-tailed continuous metric (e.g. duration).
 
@@ -116,7 +132,7 @@ def plot_log_hist(
     bins = np.logspace(np.log10(values.min()), np.log10(values.max()), 40)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    _draw_hist(ax, frame, column, bins, log_x=True)
+    _draw_hist(ax, frame, column, bins, colors, log_x=True)
     ax.set_xscale("log")
     ax.set_title(title)
     ax.set_xlabel(xlabel)
@@ -136,12 +152,19 @@ def make_plots(
     response_gaps: pd.DataFrame,
     output_dir: Path,
 ) -> None:
+    sources = set()
+    for frame in (runs, threads, model_calls, tool_calls, response_gaps):
+        if "source" in frame.columns and len(frame):
+            sources.update(frame["source"].dropna().unique())
+    colors = assign_source_colors(sources)
+
     plot_log_hist(
         runs,
         "duration_seconds",
         "Agent run duration",
         "Duration (seconds, log scale)",
         output_dir / "run_duration_hist.png",
+        colors,
     )
     plot_ecdf(
         runs,
@@ -149,6 +172,7 @@ def make_plots(
         "Agent run duration",
         "Duration (seconds, log scale)",
         output_dir / "run_duration_ecdf.png",
+        colors,
         log_x=True,
     )
     plot_log_hist(
@@ -157,6 +181,7 @@ def make_plots(
         "Idle time from last model token to next user message",
         "Seconds (log scale)",
         output_dir / "response_gap_hist.png",
+        colors,
     )
     plot_ecdf(
         response_gaps,
@@ -164,6 +189,7 @@ def make_plots(
         "Idle time from last model token to next user message",
         "Seconds (log scale)",
         output_dir / "response_gap_ecdf.png",
+        colors,
         log_x=True,
     )
     plot_count_hist(
@@ -172,6 +198,7 @@ def make_plots(
         "Tool calls per run",
         "Tool calls",
         output_dir / "tool_calls_per_run_hist.png",
+        colors,
     )
     plot_ecdf(
         runs,
@@ -179,6 +206,7 @@ def make_plots(
         "Tool calls per run",
         "Tool calls",
         output_dir / "tool_calls_per_run_ecdf.png",
+        colors,
     )
     plot_count_hist(
         threads,
@@ -186,6 +214,7 @@ def make_plots(
         "User-role prompts per thread",
         "User-role prompts",
         output_dir / "user_messages_per_thread_hist.png",
+        colors,
     )
     plot_ecdf(
         threads,
@@ -193,10 +222,11 @@ def make_plots(
         "User-role prompts per thread",
         "User-role prompts",
         output_dir / "user_messages_per_thread_ecdf.png",
+        colors,
     )
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    _draw_hist(axes[0], runs, "cache_read_ratio", np.linspace(0, 1, 31))
+    _draw_hist(axes[0], runs, "cache_read_ratio", np.linspace(0, 1, 31), colors)
     axes[0].set(
         title="Run cache-read ratio",
         xlabel="Cached / served input",
@@ -205,7 +235,7 @@ def make_plots(
     axes[0].legend()
     axes[0].grid(alpha=0.2)
 
-    _draw_hist(axes[1], threads, "cache_read_ratio", np.linspace(0, 1, 31))
+    _draw_hist(axes[1], threads, "cache_read_ratio", np.linspace(0, 1, 31), colors)
     axes[1].set(
         title="Thread cache-read ratio",
         xlabel="Cached / served input",
@@ -229,7 +259,7 @@ def make_plots(
             s=12,
             alpha=0.35,
             label=source,
-            color=SOURCE_COLORS.get(source),
+            color=colors.get(source),
         )
         valid = group[group["tool_calls"].gt(0) & group["duration_seconds"].gt(0)]
         axes[1].scatter(
@@ -238,7 +268,7 @@ def make_plots(
             s=12,
             alpha=0.35,
             label=source,
-            color=SOURCE_COLORS.get(source),
+            color=colors.get(source),
         )
     axes[0].set(
         title="Input load vs. end-to-end duration",
@@ -284,7 +314,7 @@ def make_plots(
         fig, ax = plt.subplots(figsize=(9, 5))
         boxes = ax.boxplot(values, tick_labels=labels, showfliers=False, patch_artist=True)
         for box, label in zip(boxes["boxes"], labels, strict=True):
-            box.set_facecolor(SOURCE_COLORS.get(label.split("\n", 1)[0], "white"))
+            box.set_facecolor(colors.get(label.split("\n", 1)[0], "white"))
             box.set_alpha(0.55)
         ax.set_yscale("log")
         ax.set(title="Tokens per run", ylabel="Tokens (log scale)")
@@ -354,7 +384,7 @@ def make_plots(
         fig, axes = plt.subplots(1, len(source_names), figsize=(7 * len(source_names), 6), squeeze=False)
         for ax, source in zip(axes[0], source_names):
             top_tools = tool_calls[tool_calls["source"].eq(source)]["tool_name"].value_counts().head(12)
-            top_tools.sort_values().plot.barh(ax=ax, color=SOURCE_COLORS.get(source))
+            top_tools.sort_values().plot.barh(ax=ax, color=colors.get(source))
             ax.set(title=f"Most-used tools: {source}", xlabel="Calls", ylabel="Tool")
             ax.grid(axis="x", alpha=0.25)
         fig.tight_layout()

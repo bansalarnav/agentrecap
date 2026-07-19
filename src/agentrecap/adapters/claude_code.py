@@ -2,12 +2,40 @@
 
 from pathlib import Path
 
-from .common import anonymous_id, anonymous_id_or_none, read_jsonl_records, serialized_length, speed_status
+from .common import (
+    anonymous_id,
+    anonymous_id_or_none,
+    event_sort_key,
+    init_usage_fields,
+    read_jsonl_records,
+    serialized_length,
+    speed_status,
+)
 
 SOURCE = "claude"
+PROVIDER = "anthropic"
 DISPLAY_NAME = "Claude Code"
 DEFAULT_INPUT = Path.home() / ".claude" / "projects"
 INPUT_HELP = "Claude Code projects directory"
+
+# (record type, content-block type) -> standardized event kind. Anything not
+# listed here (attachments, queue operations, titles, config records, ...) is
+# exported as "other" so the archive stays complete without growing the
+# analysis vocabulary.
+BLOCK_KINDS = {
+    ("user", "text"): "user_prompt",
+    ("assistant", "text"): "assistant_message",
+    ("assistant", "thinking"): "reasoning",
+    ("assistant", "tool_use"): "tool_call",
+    ("user", "tool_result"): "tool_result",
+}
+
+USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "cache_creation_input_tokens",
+)
 
 
 def discover_sessions(path: Path) -> list[Path]:
@@ -25,11 +53,12 @@ def convert_thread(path: Path) -> list[dict]:
 
     raw_thread_id = str(next((r.get("sessionId") for r in records if r.get("sessionId")), path.name))
     thread_id = anonymous_id(f"claude:{raw_thread_id}")
-    run_id = anonymous_id(f"claude-run:{path}")
+    file_id = anonymous_id(f"claude-file:{path}")
     tool_names_by_id = {}
+    current_model = None
     events = []
 
-    for record_index, record in enumerate(records):
+    for record in records:
         usage_record = record
         nested = (record.get("data") or {}).get("message") or {}
         if (nested.get("message") or {}).get("usage"):
@@ -38,7 +67,9 @@ def convert_thread(path: Path) -> list[dict]:
         record_type = usage_record.get("type", record.get("type", "unknown"))
         message = usage_record.get("message") or {}
         role = message.get("role") if record_type in {"user", "assistant"} else None
-        model = message.get("model")
+        record_model = message.get("model")
+        if record_model:
+            current_model = record_model
         usage = message.get("usage") or {}
         blocks = message.get("content")
         raw_message_id = message.get("id")
@@ -55,11 +86,12 @@ def convert_thread(path: Path) -> list[dict]:
             or record.get("agentId")
             or record.get("attributionAgent"),
         )
-        source_tool_assistant_id = anonymous_id_or_none("claude-event", record.get("sourceToolAssistantUUID"))
-        prompt_id = anonymous_id_or_none("claude-prompt", record.get("promptId"))
+        spawned_by_event_id = anonymous_id_or_none("claude-event", record.get("sourceToolAssistantUUID"))
         request_id = anonymous_id_or_none(
             "claude-request", usage_record.get("requestId") or record.get("requestId")
         )
+        is_sidechain = usage_record.get("isSidechain", record.get("isSidechain"))
+        timestamp = usage_record.get("timestamp") or record.get("timestamp")
         if not isinstance(blocks, list) or not blocks:
             blocks = [None]
 
@@ -67,7 +99,7 @@ def convert_thread(path: Path) -> list[dict]:
             block = block if isinstance(block, dict) else {}
             block_type = block.get("type")
             tool_name = None
-            success = None
+            tool_success = None
             tool_input = None
             tool_output = None
             text = None
@@ -80,22 +112,19 @@ def convert_thread(path: Path) -> list[dict]:
             elif block_type == "tool_result":
                 tool_name = tool_names_by_id.get(block.get("tool_use_id"))
                 tool_output = block.get("content")
-                success = not block.get("is_error", False)
+                tool_success = not block.get("is_error", False)
             elif block_type == "text":
                 text = block.get("text")
             elif block_type == "thinking":
                 text = block.get("thinking")
 
-            event_type = f"{record_type}.{block_type}" if block_type else record_type
-            is_user_prompt = event_type == "user.text"
-            is_assistant_message = event_type == "assistant.text"
-            is_tool_call = event_type == "assistant.tool_use"
-            is_tool_result = event_type == "user.tool_result"
-            tool_event_stage = None
-            if is_tool_call:
-                tool_event_stage = "call"
-            elif is_tool_result:
-                tool_event_stage = "result"
+            raw_event_type = f"{record_type}.{block_type}" if block_type else record_type
+            event_kind = BLOCK_KINDS.get((record_type, block_type), "other")
+            # Blockless user-role records mark run boundaries too (e.g. resumed
+            # prompts), even though they are not canonical user prompts.
+            is_run_start = event_kind == "user_prompt" or (
+                raw_event_type == "user" and role == "user"
+            )
 
             include_usage = block_index == 0 and bool(usage)
             input_tokens = usage.get("input_tokens") if include_usage else None
@@ -122,57 +151,40 @@ def convert_thread(path: Path) -> list[dict]:
 
             events.append(
                 {
-                    "thread_id": thread_id,
                     "source": SOURCE,
-                    "run_id": run_id,
-                    "run_event_index": len(events),
-                    "record_index": record_index,
-                    "block_index": block_index,
+                    "provider": PROVIDER,
+                    "thread_id": thread_id,
+                    "stream_id": f"agent:{agent_id}" if agent_id else "main",
+                    "file_id": file_id,
+                    "file_event_index": len(events),
                     "event_index": None,
-                    "timestamp": usage_record.get("timestamp") or record.get("timestamp"),
+                    "timestamp": timestamp,
                     "event_id": event_id,
                     "parent_event_id": parent_event_id,
+                    "agent_id": agent_id,
+                    "is_sidechain": is_sidechain,
                     "parent_thread_id": None,
                     "child_thread_id": None,
-                    "agent_id": agent_id,
-                    "agent_role": None,
-                    "is_sidechain": usage_record.get(
-                        "isSidechain", record.get("isSidechain")
-                    ),
-                    "source_tool_assistant_id": source_tool_assistant_id,
-                    "prompt_id": prompt_id,
-                    "request_id": request_id,
-                    "message_id": anonymous_id_or_none("claude-message", raw_message_id),
-                    "tool_call_id": anonymous_id_or_none("claude-tool", block.get("id") or block.get("tool_use_id")),
-                    "role": role,
-                    "event_type": event_type,
-                    "canonical_event_type": (
-                        "user_prompt"
-                        if is_user_prompt
-                        else "assistant_message"
-                        if is_assistant_message
-                        else "tool_call"
-                        if is_tool_call
-                        else "tool_result"
-                        if is_tool_result
-                        else "other"
-                    ),
-                    "is_user_prompt": is_user_prompt,
-                    "is_assistant_message": is_assistant_message,
-                    "is_tool_call": is_tool_call,
-                    "is_tool_result": is_tool_result,
-                    "tool_event_stage": tool_event_stage,
-                    "model": model,
+                    "spawned_by_event_id": spawned_by_event_id,
+                    "event_kind": event_kind,
+                    "raw_event_type": raw_event_type,
+                    "is_run_start": is_run_start,
+                    "run_end_status": None,
+                    "duration_ms": None,
+                    "time_to_first_token_ms": None,
+                    "model": record_model or current_model,
                     "reasoning_effort": None,
                     "speed": speed_status(usage.get("speed"), usage.get("service_tier")),
                     "service_tier": usage.get("service_tier"),
                     "inference_geo": usage.get("inference_geo"),
-                    "usage_kind": "model_call" if include_usage else None,
+                    "message_id": anonymous_id_or_none("claude-message", raw_message_id),
+                    "request_id": request_id,
+                    "tool_call_id": anonymous_id_or_none(
+                        "claude-tool", block.get("id") or block.get("tool_use_id")
+                    ),
                     "tool_name": tool_name,
-                    "success": success,
-                    "status": None,
-                    "duration_ms": None,
-                    "time_to_first_token_ms": None,
+                    "tool_success": tool_success,
+                    "usage_kind": "model_call" if include_usage else None,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "cached_input_tokens": cached_tokens,
@@ -215,39 +227,37 @@ def convert_thread(path: Path) -> list[dict]:
                 raw_message_id
                 or usage_record.get("uuid")
                 or record.get("uuid")
-                or f"record-{record_index}"
+                or f"event-{len(events)}"
             )
             events.append(
                 {
                     **{key: None for key in events[-1]},
-                    "thread_id": thread_id,
                     "source": SOURCE,
-                    "run_id": run_id,
-                    "run_event_index": len(events),
-                    "record_index": record_index,
-                    "block_index": None,
-                    "event_index": None,
-                    "timestamp": usage_record.get("timestamp") or record.get("timestamp"),
+                    "provider": PROVIDER,
+                    "thread_id": thread_id,
+                    "stream_id": f"agent:{agent_id}" if agent_id else "main",
+                    "file_id": file_id,
+                    "file_event_index": len(events),
+                    "timestamp": timestamp,
                     "event_id": anonymous_id_or_none(
                         "claude-event", f"{advisor_identity}:advisor:{iteration_index}"
                     ),
                     "parent_event_id": event_id,
                     "agent_id": agent_id,
-                    "is_sidechain": usage_record.get(
-                        "isSidechain", record.get("isSidechain")
-                    ),
-                    "request_id": request_id,
-                    "message_id": anonymous_id_or_none(
-                        "claude-message", f"{advisor_identity}:advisor:{iteration_index}"
-                    ),
-                    "event_type": "assistant.advisor_usage",
-                    "canonical_event_type": "other",
+                    "is_sidechain": is_sidechain,
+                    "event_kind": "other",
+                    "raw_event_type": "assistant.advisor_usage",
+                    "is_run_start": False,
                     "model": advisor_model,
                     "speed": speed_status(
                         iteration.get("speed"), iteration.get("service_tier")
                     ),
                     "service_tier": iteration.get("service_tier"),
                     "inference_geo": iteration.get("inference_geo"),
+                    "message_id": anonymous_id_or_none(
+                        "claude-message", f"{advisor_identity}:advisor:{iteration_index}"
+                    ),
+                    "request_id": request_id,
                     "usage_kind": "advisor_call",
                     "input_tokens": advisor_input,
                     "output_tokens": advisor_output,
@@ -264,8 +274,112 @@ def convert_thread(path: Path) -> list[dict]:
                             advisor_creation,
                         )
                     ),
-                    "reported_cost_usd": None,
                 }
             )
 
+    return events
+
+
+def _usage_score(event: dict) -> tuple:
+    return (
+        event["is_sidechain"] is not True,
+        sum(event.get(key) or 0 for key in USAGE_TOKEN_KEYS),
+        event.get("speed") != "unknown",
+        sum(event.get(key) is not None for key in USAGE_TOKEN_KEYS),
+    )
+
+
+def finalize_events(events: list[dict]) -> list[dict]:
+    """Mark canonical model-call usage rows across all converted sessions.
+
+    Resumed and forked sessions replay earlier records into new files, and
+    sidechain streams can repeat the main stream's usage, so the same API call
+    can appear several times. Duplicates are kept but marked with a
+    usage_dedup_reason; the best-scoring copy of each call becomes canonical.
+    """
+    init_usage_fields(events)
+    usage_events = sorted(
+        (
+            event
+            for event in events
+            if any(event.get(key) is not None for key in USAGE_TOKEN_KEYS)
+        ),
+        key=event_sort_key,
+    )
+
+    survivors: list[dict] = []
+    exact_identity: dict[tuple, int] = {}
+    message_positions: dict[str, list[int]] = {}
+    request_identity: dict[str, int] = {}
+    fallback_identity: dict[tuple, int] = {}
+    for event in usage_events:
+        message_id = event.get("message_id")
+        request_id = event.get("request_id")
+        position = None
+        match_reason = None
+        fingerprint = None
+        if message_id:
+            position = exact_identity.get((message_id, request_id))
+            if position is None:
+                # A repeated message_id with a different request_id is only the
+                # same call when one copy is a sidechain replay of the other.
+                for candidate_position in message_positions.get(message_id, []):
+                    candidate = survivors[candidate_position]
+                    if event["is_sidechain"] is True or candidate["is_sidechain"] is True:
+                        position = candidate_position
+                        break
+            if position is not None:
+                match_reason = "duplicate_message_id"
+        elif request_id:
+            position = request_identity.get(request_id)
+            if position is not None:
+                match_reason = "duplicate_request_id"
+        else:
+            fingerprint = (
+                event["thread_id"],
+                event.get("timestamp"),
+                event.get("model"),
+                event.get("usage_kind"),
+                *(event.get(key) for key in USAGE_TOKEN_KEYS),
+            )
+            position = fallback_identity.get(fingerprint)
+            if position is not None:
+                match_reason = "duplicate_fingerprint"
+
+        if position is None:
+            position = len(survivors)
+            survivors.append(event)
+            if message_id:
+                message_positions.setdefault(message_id, []).append(position)
+            elif request_id:
+                request_identity[request_id] = position
+            else:
+                fallback_identity[fingerprint] = position
+        else:
+            existing = survivors[position]
+            if _usage_score(event) > _usage_score(existing):
+                existing["usage_dedup_reason"] = match_reason
+                survivors[position] = event
+            else:
+                event["usage_dedup_reason"] = match_reason
+        if message_id:
+            exact_identity[(message_id, request_id)] = position
+
+    for event in survivors:
+        uncached = event.get("input_tokens") or 0
+        cached = event.get("cached_input_tokens") or 0
+        creation = event.get("cache_creation_input_tokens") or 0
+        output = event.get("output_tokens") or 0
+        if not any(value > 0 for value in (uncached, cached, creation, output)):
+            event["usage_dedup_reason"] = "zero_usage"
+            continue
+        event["usage_canonical"] = True
+        event["usage_source"] = "request_usage"
+        event["call_served_input_tokens"] = uncached + cached + creation
+        event["call_uncached_input_tokens"] = uncached
+        event["call_cached_input_tokens"] = cached
+        event["call_cache_creation_input_tokens"] = creation
+        event["call_cache_creation_5m_input_tokens"] = event.get("cache_creation_5m_input_tokens") or 0
+        event["call_cache_creation_1h_input_tokens"] = event.get("cache_creation_1h_input_tokens") or 0
+        event["call_output_tokens"] = output
     return events

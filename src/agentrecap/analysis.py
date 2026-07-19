@@ -7,12 +7,6 @@ import pandas as pd
 from .plots import make_plots
 
 
-USER_EVENT_TYPES = {
-    "codex": {"event_msg.user_message"},
-    "claude": {"user", "user.text"},
-}
-
-
 def safe_ratio(numerator: pd.Series | float, denominator: pd.Series | float):
     return numerator / denominator.replace(0, np.nan) if isinstance(denominator, pd.Series) else (
         numerator / denominator if denominator else np.nan
@@ -24,84 +18,64 @@ def percentile(series: pd.Series, value: float) -> float:
     return values.quantile(value) if not values.empty else np.nan
 
 
+REQUIRED_COLUMNS = {
+    "source",
+    "provider",
+    "thread_id",
+    "stream_id",
+    "file_id",
+    "event_index",
+    "timestamp",
+    "event_kind",
+    "raw_event_type",
+    "is_run_start",
+    "run_end_status",
+    "is_sidechain",
+    "agent_id",
+    "tool_call_id",
+    "tool_name",
+    "tool_success",
+    "duration_ms",
+    "time_to_first_token_ms",
+    "model",
+    "message_id",
+    "request_id",
+    "speed",
+    "service_tier",
+    "inference_geo",
+    "usage_kind",
+    "usage_canonical",
+    "usage_dedup_reason",
+    "usage_source",
+    "call_served_input_tokens",
+    "call_uncached_input_tokens",
+    "call_cached_input_tokens",
+    "call_cache_creation_input_tokens",
+    "call_cache_creation_5m_input_tokens",
+    "call_cache_creation_1h_input_tokens",
+    "call_output_tokens",
+    "call_reasoning_output_tokens",
+    "call_reasoning_tokens_available",
+    "reported_cost_usd",
+}
+
+# The model's own activity within a run; its latest timestamp is when the model
+# stopped emitting output.
+ASSISTANT_ACTIVITY_KINDS = ["assistant_message", "reasoning", "tool_call"]
+
+
 def load_events(path: Path) -> pd.DataFrame:
     events = pd.read_csv(path, low_memory=False)
-    required = {
-        "thread_id",
-        "source",
-        "event_index",
-        "timestamp",
-        "event_type",
-        "role",
-        "agent_id",
-        "is_sidechain",
-        "tool_call_id",
-        "tool_name",
-        "success",
-        "status",
-        "duration_ms",
-        "time_to_first_token_ms",
-        "input_tokens",
-        "output_tokens",
-        "cached_input_tokens",
-        "cache_creation_input_tokens",
-        "cache_creation_5m_input_tokens",
-        "cache_creation_1h_input_tokens",
-        "reasoning_output_tokens",
-        "cumulative_input_tokens",
-        "cumulative_output_tokens",
-        "cumulative_cached_input_tokens",
-        "cumulative_reasoning_output_tokens",
-        "model",
-        "message_id",
-        "request_id",
-        "speed",
-        "service_tier",
-        "inference_geo",
-        "usage_kind",
-        "reported_cost_usd",
-    }
-    missing = required - set(events.columns)
+    missing = REQUIRED_COLUMNS - set(events.columns)
     if missing:
         raise ValueError(f"CSV is missing required columns: {sorted(missing)}")
 
     events = events.copy()
-    if "run_id" in events.columns:
-        events = events.rename(columns={"run_id": "export_run_id"})
-    else:
-        events["export_run_id"] = pd.NA
     events["timestamp"] = pd.to_datetime(events["timestamp"], utc=True, errors="coerce")
-    events["is_sidechain"] = events["is_sidechain"].eq(True)
-
-    # Claude can store the main agent and several parallel subagents under one
-    # thread_id. Treat each agent_id as a separate event stream for turn boundaries.
-    events["stream_id"] = "main"
-    claude_agents = events["source"].eq("claude") & events["agent_id"].notna()
-    events.loc[claude_agents, "stream_id"] = "agent:" + events.loc[claude_agents, "agent_id"].astype(str)
-
-    if "is_user_prompt" in events.columns:
-        events["is_user_prompt"] = events["is_user_prompt"].eq(True)
-    else:
-        events["is_user_prompt"] = False
-        for source, event_types in USER_EVENT_TYPES.items():
-            mask = events["source"].eq(source) & events["event_type"].isin(event_types)
-            if source == "claude":
-                mask &= events["role"].eq("user")
-            events.loc[mask, "is_user_prompt"] = True
+    for column in ["is_sidechain", "is_run_start", "usage_canonical", "call_reasoning_tokens_available"]:
+        events[column] = events[column].eq(True)
+    events["is_user_prompt"] = events["event_kind"].eq("user_prompt")
     events["is_top_level_user_prompt"] = events["is_user_prompt"] & ~events["is_sidechain"]
-
-    # Run boundaries are stricter than all canonical user-role messages. For
-    # example, Codex writes an abort notification as a user-role response item,
-    # but it does not start another model run.
-    events["is_run_start"] = (
-        events["source"].eq("codex") & events["event_type"].eq("event_msg.user_message")
-    ) | (
-        events["source"].eq("claude")
-        & (
-            events["is_user_prompt"]
-            | (events["event_type"].eq("user") & events["role"].eq("user"))
-        )
-    )
 
     events = events.sort_values(
         ["source", "thread_id", "stream_id", "timestamp", "event_index"],
@@ -125,11 +99,13 @@ def load_events(path: Path) -> pd.DataFrame:
 
 
 def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
+    """One row per canonical model call, as marked by the source adapters."""
     columns = [
         "source",
+        "provider",
         "thread_id",
         "stream_id",
-        "export_run_id",
+        "file_id",
         "run_id",
         "timestamp",
         "model",
@@ -153,207 +129,39 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
         "reasoning_share_of_output",
         "reported_cost_usd",
     ]
-    call_frames = []
-
-    claude = events[events["source"].eq("claude")].copy()
-    claude_usage = claude[
-        claude[["input_tokens", "output_tokens", "cached_input_tokens", "cache_creation_input_tokens"]]
-        .notna()
-        .any(axis=1)
-    ].copy()
-    token_columns = [
-        "input_tokens",
-        "output_tokens",
-        "cached_input_tokens",
-        "cache_creation_input_tokens",
-    ]
-    survivors = []
-    exact_identity = {}
-    message_positions = {}
-    request_identity = {}
-    fallback_identity = {}
-    for index, row in claude_usage.iterrows():
-        message_id = row["message_id"] if pd.notna(row["message_id"]) else None
-        request_id = row["request_id"] if pd.notna(row["request_id"]) else None
-        position = exact_identity.get((message_id, request_id)) if message_id else None
-        if position is None and message_id:
-            for candidate_position in message_positions.get(message_id, []):
-                candidate = claude_usage.loc[survivors[candidate_position]]
-                if bool(row["is_sidechain"]) or bool(candidate["is_sidechain"]):
-                    position = candidate_position
-                    break
-        if position is None and message_id is None and request_id:
-            position = request_identity.get(request_id)
-        if position is None and message_id is None and request_id is None:
-            fingerprint = tuple(
-                row.get(column)
-                for column in ["thread_id", "timestamp", "model", "usage_kind", *token_columns]
-            )
-            position = fallback_identity.get(fingerprint)
-
-        if position is None:
-            position = len(survivors)
-            survivors.append(index)
-            if message_id:
-                message_positions.setdefault(message_id, []).append(position)
-            elif request_id:
-                request_identity[request_id] = position
-            else:
-                fallback_identity[fingerprint] = position
-        else:
-            existing = claude_usage.loc[survivors[position]]
-            row_score = (
-                not bool(row["is_sidechain"]),
-                sum(row[column] if pd.notna(row[column]) else 0 for column in token_columns),
-                row["speed"] != "unknown",
-                sum(pd.notna(row[column]) for column in token_columns),
-            )
-            existing_score = (
-                not bool(existing["is_sidechain"]),
-                sum(
-                    existing[column] if pd.notna(existing[column]) else 0
-                    for column in token_columns
-                ),
-                existing["speed"] != "unknown",
-                sum(pd.notna(existing[column]) for column in token_columns),
-            )
-            if row_score > existing_score:
-                survivors[position] = index
-        if message_id:
-            exact_identity[(message_id, request_id)] = position
-
-    claude_usage = claude_usage.loc[survivors].copy()
-    claude_usage["uncached_input_tokens"] = claude_usage["input_tokens"].fillna(0)
-    claude_usage["cached_input_tokens"] = claude_usage["cached_input_tokens"].fillna(0)
-    claude_usage["cache_creation_input_tokens"] = claude_usage["cache_creation_input_tokens"].fillna(0)
-    claude_usage["cache_creation_5m_input_tokens"] = claude_usage[
-        "cache_creation_5m_input_tokens"
-    ].fillna(0)
-    claude_usage["cache_creation_1h_input_tokens"] = claude_usage[
-        "cache_creation_1h_input_tokens"
-    ].fillna(0)
-    claude_usage["served_input_tokens"] = (
-        claude_usage["uncached_input_tokens"]
-        + claude_usage["cached_input_tokens"]
-        + claude_usage["cache_creation_input_tokens"]
-    )
-    claude_usage["output_tokens"] = claude_usage["output_tokens"].fillna(0)
-    claude_usage = claude_usage[
-        claude_usage[
-            [
-                "uncached_input_tokens",
-                "cached_input_tokens",
-                "cache_creation_input_tokens",
-                "output_tokens",
-            ]
-        ].gt(0).any(axis=1)
-    ].copy()
-    claude_usage["reasoning_output_tokens"] = np.nan
-    claude_usage["reasoning_tokens_available"] = False
-    claude_usage["non_reasoning_output_tokens"] = np.nan
-    claude_usage["reasoning_share_of_output"] = np.nan
-    claude_usage["usage_source"] = "request_usage"
-    call_frames.append(claude_usage[columns])
-
-    codex = events[
-        events["source"].eq("codex")
-        & events[["cumulative_input_tokens", "cumulative_output_tokens"]].notna().any(axis=1)
-    ].copy()
-    codex = codex.sort_values(["thread_id", "event_index"], kind="stable")
-    codex = codex.drop_duplicates(
-        [
-            "thread_id",
-            "model",
-            "cumulative_input_tokens",
-            "cumulative_output_tokens",
-            "cumulative_cached_input_tokens",
-            "cumulative_reasoning_output_tokens",
-        ],
-        keep="first",
-    )
-    cumulative_columns = {
-        "cumulative_input_tokens": "served_input_tokens",
-        "cumulative_output_tokens": "output_tokens",
-        "cumulative_cached_input_tokens": "cached_input_tokens",
-        "cumulative_reasoning_output_tokens": "reasoning_output_tokens",
-    }
-    for cumulative, output in cumulative_columns.items():
-        current = codex[cumulative].fillna(0)
-        delta = codex.groupby("thread_id", sort=False)[cumulative].diff()
-        delta = delta.fillna(current)
-        codex[output] = delta.where(delta.ge(0), current).fillna(0)
-
-    # Repeated event_msg.token_count snapshots have zero cumulative delta and
-    # are not additional model calls.
-    codex = codex[
-        codex[["served_input_tokens", "output_tokens", "cached_input_tokens"]].gt(0).any(axis=1)
-    ].copy()
-    codex["cache_creation_input_tokens"] = 0.0
-    codex["cache_creation_5m_input_tokens"] = 0.0
-    codex["cache_creation_1h_input_tokens"] = 0.0
-    codex["uncached_input_tokens"] = (
-        codex["served_input_tokens"] - codex["cached_input_tokens"]
-    ).clip(lower=0)
-    codex["reasoning_tokens_available"] = codex["cumulative_reasoning_output_tokens"].notna()
-    codex["non_reasoning_output_tokens"] = (
-        codex["output_tokens"] - codex["reasoning_output_tokens"]
-    ).clip(lower=0)
-    codex["reasoning_share_of_output"] = safe_ratio(
-        codex["reasoning_output_tokens"], codex["output_tokens"]
-    )
-    codex["usage_source"] = "cumulative_ledger_delta"
-    call_frames.append(codex[columns])
-
-    ledger_runs = set(codex["export_run_id"].dropna())
-    codex_snapshots = events[
-        events["source"].eq("codex")
-        & ~events["export_run_id"].isin(ledger_runs)
-        & events[["input_tokens", "output_tokens"]].notna().any(axis=1)
-    ].copy()
-    if not codex_snapshots.empty:
-        codex_snapshots = codex_snapshots.drop_duplicates(
-            [
-                "thread_id",
-                "export_run_id",
-                "model",
-                "input_tokens",
-                "output_tokens",
-                "cached_input_tokens",
-                "reasoning_output_tokens",
-            ],
-            keep="last",
-        )
-        codex_snapshots["served_input_tokens"] = codex_snapshots["input_tokens"].fillna(0)
-        codex_snapshots["cached_input_tokens"] = codex_snapshots["cached_input_tokens"].fillna(0)
-        codex_snapshots["uncached_input_tokens"] = (
-            codex_snapshots["served_input_tokens"] - codex_snapshots["cached_input_tokens"]
-        ).clip(lower=0)
-        for column in [
+    calls = events[events["usage_canonical"]].copy()
+    # The raw per-event usage observations stay in the export for auditing;
+    # the normalized call_* columns are the per-call accounting.
+    calls = calls.drop(
+        columns=[
+            "cached_input_tokens",
             "cache_creation_input_tokens",
             "cache_creation_5m_input_tokens",
             "cache_creation_1h_input_tokens",
-        ]:
-            codex_snapshots[column] = 0.0
-        codex_snapshots["output_tokens"] = codex_snapshots["output_tokens"].fillna(0)
-        codex_snapshots["reasoning_tokens_available"] = codex_snapshots[
-            "reasoning_output_tokens"
-        ].notna()
-        codex_snapshots["non_reasoning_output_tokens"] = (
-            codex_snapshots["output_tokens"]
-            - codex_snapshots["reasoning_output_tokens"].fillna(0)
-        ).clip(lower=0)
-        codex_snapshots["reasoning_share_of_output"] = safe_ratio(
-            codex_snapshots["reasoning_output_tokens"], codex_snapshots["output_tokens"]
-        )
-        codex_snapshots = codex_snapshots[
-            codex_snapshots[
-                ["served_input_tokens", "output_tokens", "cached_input_tokens"]
-            ].gt(0).any(axis=1)
-        ].copy()
-        codex_snapshots["usage_source"] = "deduplicated_last_snapshot"
-        call_frames.append(codex_snapshots[columns])
-
-    model_calls = pd.concat(call_frames, ignore_index=True)
+            "output_tokens",
+            "reasoning_output_tokens",
+        ]
+    )
+    calls = calls.rename(
+        columns={
+            "call_served_input_tokens": "served_input_tokens",
+            "call_uncached_input_tokens": "uncached_input_tokens",
+            "call_cached_input_tokens": "cached_input_tokens",
+            "call_cache_creation_input_tokens": "cache_creation_input_tokens",
+            "call_cache_creation_5m_input_tokens": "cache_creation_5m_input_tokens",
+            "call_cache_creation_1h_input_tokens": "cache_creation_1h_input_tokens",
+            "call_output_tokens": "output_tokens",
+            "call_reasoning_output_tokens": "reasoning_output_tokens",
+            "call_reasoning_tokens_available": "reasoning_tokens_available",
+        }
+    )
+    calls["non_reasoning_output_tokens"] = (
+        calls["output_tokens"] - calls["reasoning_output_tokens"]
+    ).clip(lower=0)
+    calls["reasoning_share_of_output"] = safe_ratio(
+        calls["reasoning_output_tokens"], calls["output_tokens"]
+    )
+    model_calls = calls[columns].copy()
     model_calls["cache_read_ratio"] = safe_ratio(
         model_calls["cached_input_tokens"], model_calls["served_input_tokens"]
     )
@@ -369,24 +177,7 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_tool_calls(events: pd.DataFrame) -> pd.DataFrame:
-    if "is_tool_call" in events.columns:
-        request_mask = events["is_tool_call"].eq(True)
-        if "tool_event_stage" in events.columns:
-            request_mask &= events["tool_event_stage"].eq("call")
-    else:
-        request_mask = (
-            events["source"].eq("codex")
-            & events["event_type"].str.startswith("response_item.", na=False)
-            & events["event_type"].str.endswith("_call", na=False)
-        ) | (events["source"].eq("claude") & events["event_type"].eq("assistant.tool_use"))
-    requests = events[request_mask].copy()
-
-    derived_name = (
-        requests["event_type"]
-        .str.removeprefix("response_item.")
-        .str.removesuffix("_call")
-    )
-    requests["tool_name"] = requests["tool_name"].fillna(derived_name)
+    requests = events[events["event_kind"].eq("tool_call")].copy()
 
     with_id = requests[requests["tool_call_id"].notna()].drop_duplicates(
         ["source", "thread_id", "stream_id", "run_id", "tool_call_id"], keep="first"
@@ -394,13 +185,15 @@ def build_tool_calls(events: pd.DataFrame) -> pd.DataFrame:
     without_id = requests[requests["tool_call_id"].isna()]
     requests = pd.concat([with_id, without_id], ignore_index=True)
 
-    outcomes = events[events["tool_call_id"].notna() & events["success"].notna()].copy()
+    # Any event carrying an outcome for a call id counts (tool results and
+    # runtime completion echoes alike); the latest observation wins.
+    outcomes = events[events["tool_call_id"].notna() & events["tool_success"].notna()].copy()
     if not outcomes.empty:
         outcomes = (
             outcomes.sort_values("timestamp", kind="stable")
             .groupby(["source", "thread_id", "stream_id", "tool_call_id"], as_index=False)
-            .tail(1)[["source", "thread_id", "stream_id", "tool_call_id", "success"]]
-            .rename(columns={"success": "call_success"})
+            .tail(1)[["source", "thread_id", "stream_id", "tool_call_id", "tool_success"]]
+            .rename(columns={"tool_success": "call_success"})
         )
         requests = requests.merge(
             outcomes,
@@ -415,7 +208,7 @@ def build_tool_calls(events: pd.DataFrame) -> pd.DataFrame:
             "source",
             "thread_id",
             "stream_id",
-            "export_run_id",
+            "file_id",
             "run_id",
             "timestamp",
             "tool_call_id",
@@ -443,23 +236,19 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         prompt_rows = group[group["is_run_start"]]
         start = prompt_rows["timestamp"].min()
 
-        if source == "codex":
-            terminal = group[group["event_type"].isin(["event_msg.task_complete", "event_msg.turn_aborted"])]
-            assistant = group[
-                group["event_type"].eq("response_item.message") & group["role"].eq("assistant")
-            ]
-        else:
-            terminal = group.iloc[0:0]
-            assistant = group[group["event_type"].str.startswith("assistant.", na=False)]
+        terminal = group[group["run_end_status"].notna()]
+        assistant = group[group["event_kind"].isin(ASSISTANT_ACTIVITY_KINDS)]
 
         if not terminal.empty:
             end = terminal["timestamp"].max()
             duration_values = terminal["duration_ms"].dropna()
             duration_ms = duration_values.iloc[-1] if not duration_values.empty else np.nan
             duration_source = "reported_duration_ms" if not duration_values.empty else "event_timestamps"
-            status = "aborted" if terminal["event_type"].eq("event_msg.turn_aborted").any() else "completed"
+            status = "aborted" if terminal["run_end_status"].eq("aborted").any() else "completed"
         else:
-            text_end = assistant[assistant["event_type"].isin(["assistant.text", "response_item.message"])]
+            # No explicit run_end event (e.g. Claude): infer the ending from the
+            # final assistant message.
+            text_end = group[group["event_kind"].eq("assistant_message")]
             end = text_end["timestamp"].max() if not text_end.empty else assistant["timestamp"].max()
             if pd.isna(end):
                 end = group["timestamp"].max()
@@ -470,9 +259,9 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         if pd.isna(duration_ms) and pd.notna(start) and pd.notna(end):
             duration_ms = (end - start).total_seconds() * 1000
 
-        # Timestamp of the model's last emitted token. For codex, end_time is the
-        # terminal task_complete/turn_aborted event, which lands after the final
-        # assistant message; last_output_time is that final message instead.
+        # Timestamp of the model's last emitted token. A terminal run_end event
+        # lands after the final assistant activity; last_output_time is that
+        # final activity instead.
         last_output_time = assistant["timestamp"].max()
         if pd.isna(last_output_time):
             last_output_time = end
@@ -484,8 +273,8 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
                 "source": source,
                 "thread_id": group["thread_id"].iloc[0],
                 "stream_id": group["stream_id"].iloc[0],
-                "export_run_ids": ",".join(
-                    sorted(group["export_run_id"].dropna().astype(str).unique())
+                "file_ids": ",".join(
+                    sorted(group["file_id"].dropna().astype(str).unique())
                 ),
                 "run_number": int(group["run_number"].iloc[0]),
                 "is_sidechain": bool(prompt_rows["is_sidechain"].any()),
@@ -878,27 +667,30 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
         output_dir / "tool_usage.csv", index=False
     )
 
-    data_quality = pd.DataFrame(
-        [
-            {"check": "events", "value": len(events)},
-            {"check": "invalid_timestamps", "value": events["timestamp"].isna().sum()},
-            {
-                "check": "threads_without_canonical_user_prompt",
-                "value": (threads["user_messages"] == 0).sum(),
-            },
-            {"check": "model_calls_before_first_prompt", "value": model_calls["run_id"].isna().sum()},
-            {"check": "tool_calls_before_first_prompt", "value": tool_calls["run_id"].isna().sum()},
-            {
-                "check": "runs_with_collapsed_timestamps",
-                "value": runs["duration_quality"].eq("collapsed_timestamps").sum(),
-            },
-            {"check": "runs_without_usable_duration", "value": runs["duration_seconds"].isna().sum()},
-            {
-                "check": "duplicate_thread_event_indexes",
-                "value": events.duplicated(["source", "thread_id", "stream_id", "event_index"]).sum(),
-            },
-        ]
-    )
+    data_quality_rows = [
+        {"check": "events", "value": len(events)},
+        {"check": "invalid_timestamps", "value": events["timestamp"].isna().sum()},
+        {
+            "check": "threads_without_canonical_user_prompt",
+            "value": (threads["user_messages"] == 0).sum(),
+        },
+        {"check": "model_calls_before_first_prompt", "value": model_calls["run_id"].isna().sum()},
+        {"check": "tool_calls_before_first_prompt", "value": tool_calls["run_id"].isna().sum()},
+        {
+            "check": "runs_with_collapsed_timestamps",
+            "value": runs["duration_quality"].eq("collapsed_timestamps").sum(),
+        },
+        {"check": "runs_without_usable_duration", "value": runs["duration_seconds"].isna().sum()},
+        {
+            "check": "duplicate_thread_event_indexes",
+            "value": events.duplicated(["source", "thread_id", "stream_id", "event_index"]).sum(),
+        },
+        {
+            "check": "non_canonical_usage_rows",
+            "value": events["usage_dedup_reason"].notna().sum(),
+        },
+    ]
+    data_quality = pd.DataFrame(data_quality_rows)
     data_quality.to_csv(output_dir / "data_quality.csv", index=False)
 
     make_plots(runs, threads, model_calls, tool_calls, response_gaps, output_dir)
