@@ -17,7 +17,7 @@ def main() -> None:
         / datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
     )
     parser = argparse.ArgumentParser(
-        description="Convert Codex, Claude, and Cursor sessions, analyze them, and create an offline HTML report."
+        description="Analyze local coding-agent sessions and create an offline HTML report."
     )
     for source, adapter in ADAPTERS.items():
         parser.add_argument(
@@ -32,7 +32,7 @@ def main() -> None:
         default=default_output_dir,
         help="Report directory (default: ~/.agentrecap/reports/<timestamp>)",
     )
-    parser.add_argument("--title", default="Coding agent usage report")
+    parser.add_argument("--title", default="Coding-agent usage report")
     parser.add_argument("--open", action="store_true", help="Open the finished report in the default browser")
     args = parser.parse_args()
 

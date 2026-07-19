@@ -56,6 +56,8 @@ Explicit historical `fast`/priority metadata uses the provider's fast-mode price
 
 These are API-equivalent token estimates, not ChatGPT, Codex, Claude, or Claude Code subscription spend or credit consumption. They do not include negotiated discounts, batch pricing, or provider/platform charges not represented in the logs. Unknown model IDs and fast modes without an explicit catalog price remain unpriced rather than receiving a guessed rate.
 
+VS Code chat session files do not record token usage, so VS Code model calls and cost estimates are unavailable. Its prompts, responses, tools, timings, and run outcomes still appear in the other report metrics.
+
 
 ## Development
 

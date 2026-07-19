@@ -244,7 +244,13 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
             duration_values = terminal["duration_ms"].dropna()
             duration_ms = duration_values.iloc[-1] if not duration_values.empty else np.nan
             duration_source = "reported_duration_ms" if not duration_values.empty else "event_timestamps"
-            status = "aborted" if terminal["run_end_status"].eq("aborted").any() else "completed"
+            terminal_statuses = set(terminal["run_end_status"])
+            if "aborted" in terminal_statuses:
+                status = "aborted"
+            elif "error" in terminal_statuses:
+                status = "error"
+            else:
+                status = "completed"
         else:
             # No explicit run_end event (e.g. Claude): infer the ending from the
             # final assistant message.

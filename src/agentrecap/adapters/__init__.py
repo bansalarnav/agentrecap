@@ -26,6 +26,6 @@ and register it in ``ADAPTERS``.
 """
 
 
-from . import claude_code, codex, opencode, cursor
+from . import claude_code, codex, opencode, cursor, vscode
 
-ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode, cursor)}
+ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode, cursor, vscode)}
