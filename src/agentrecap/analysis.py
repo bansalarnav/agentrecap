@@ -698,7 +698,7 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze Codex and Claude coding-agent event threads.")
+    parser = argparse.ArgumentParser(description="Analyze coding-agent event threads.")
     parser.add_argument(
         "--input",
         type=Path,
