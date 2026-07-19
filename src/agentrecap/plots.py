@@ -66,7 +66,9 @@ def _draw_hist(ax, frame, column, bins, colors, clip_upper=None, log_x=False):
 
     Sources differ hugely in sample size (e.g. codex has ~10x claude's runs), so
     raw counts bury the smaller source. Normalizing each source to a fraction of
-    its own observations makes the shapes directly comparable.
+    its own observations makes the shapes directly comparable. A single value
+    is shown as a rug marker because normalizing it would create a misleading
+    full-height bar.
     """
     for source in sorted(frame["source"].dropna().unique()):
         values = frame.loc[frame["source"].eq(source), column]
@@ -76,6 +78,19 @@ def _draw_hist(ax, frame, column, bins, colors, clip_upper=None, log_x=False):
         if clip_upper is not None:
             values = values.clip(upper=clip_upper)
         if values.empty:
+            continue
+        if len(values) == 1:
+            ax.plot(
+                values,
+                [0.02],
+                marker="|",
+                markersize=10,
+                linestyle="none",
+                alpha=0.8,
+                label=source,
+                color=colors.get(source),
+                transform=ax.get_xaxis_transform(),
+            )
             continue
         weights = np.ones(len(values)) / len(values)
         ax.hist(
@@ -129,7 +144,12 @@ def plot_log_hist(
     values = values[values.gt(0)]
     if values.empty:
         return
-    bins = np.logspace(np.log10(values.min()), np.log10(values.max()), 40)
+    lower = values.min()
+    upper = values.max()
+    if lower == upper:
+        lower /= np.sqrt(10)
+        upper *= np.sqrt(10)
+    bins = np.logspace(np.log10(lower), np.log10(upper), 40)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     _draw_hist(ax, frame, column, bins, colors, log_x=True)

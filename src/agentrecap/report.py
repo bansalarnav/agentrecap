@@ -15,6 +15,7 @@ from .gather_session_data import convert_sessions
 
 
 MODELS_DEV_URL = "https://models.dev/api.json"
+BARE_MODEL_PROVIDERS = ("anthropic", "openai", "google")
 
 CHARTS = {
     "run_duration_hist.png": ("Run duration", "Distribution of end-to-end run duration."),
@@ -91,10 +92,31 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
         provider_id = row.get("provider")
         if pd.isna(provider_id):
             provider_id = None
-        model = catalog.get(provider_id, {}).get("models", {}).get(str(row["model"]))
+        model_id = str(row["model"])
+        pricing_provider = provider_id
+        model = catalog.get(provider_id, {}).get("models", {}).get(model_id)
         cost = dict(model.get("cost") or {}) if model else None
-        row["pricing_provider"] = provider_id
-        row["pricing_status"] = "matched" if cost else "unmatched_model"
+        bare_model_fallback = False
+        if not cost:
+            for candidate_provider in BARE_MODEL_PROVIDERS:
+                candidate = (
+                    catalog.get(candidate_provider, {}).get("models", {}).get(model_id)
+                )
+                candidate_cost = dict(candidate.get("cost") or {}) if candidate else None
+                if candidate_cost:
+                    pricing_provider = candidate_provider
+                    model = candidate
+                    cost = candidate_cost
+                    bare_model_fallback = True
+                    break
+
+        row["pricing_provider"] = pricing_provider
+        if bare_model_fallback:
+            row["pricing_status"] = "matched_bare_model_fallback"
+        elif cost:
+            row["pricing_status"] = "matched"
+        else:
+            row["pricing_status"] = "unmatched_model"
         row["pricing_tier"] = None
         row["estimated_cost_usd"] = None
         if cost:
@@ -137,7 +159,7 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
                     ("claude-sonnet-4-20250514", "claude-sonnet-4-5")
                 )
                 if (
-                    provider_id == "anthropic"
+                    pricing_provider == "anthropic"
                     and not context_tiers
                     and historical_sonnet
                     and served_input_tokens > 200_000
@@ -156,7 +178,11 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
                     row["pricing_tier"] = "historical_context_over_200000"
 
                 if speed == "unknown":
-                    row["pricing_status"] = "matched_speed_unknown"
+                    row["pricing_status"] = (
+                        "matched_bare_model_fallback_speed_unknown"
+                        if bare_model_fallback
+                        else "matched_speed_unknown"
+                    )
                     if row["pricing_tier"] is None:
                         row["pricing_tier"] = "standard_fallback_speed_unknown"
                 elif row["pricing_tier"] is None:
@@ -169,10 +195,12 @@ def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
                 rows.append(row)
                 continue
             cache_read_price = cost.get(
-                "cache_read", input_price * 0.1 if provider_id == "anthropic" else input_price
+                "cache_read",
+                input_price * 0.1 if pricing_provider == "anthropic" else input_price,
             )
             cache_write_price = cost.get(
-                "cache_write", input_price * 1.25 if provider_id == "anthropic" else input_price
+                "cache_write",
+                input_price * 1.25 if pricing_provider == "anthropic" else input_price,
             )
             cache_write_5m_price = cost.get("cache_write_5m", cache_write_price)
             cache_write_1h_price = cost.get("cache_write_1h", input_price * 2)
