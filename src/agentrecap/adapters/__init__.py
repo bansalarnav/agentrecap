@@ -25,6 +25,7 @@ To support a new tool (e.g. opencode), add a module implementing this interface
 and register it in ``ADAPTERS``.
 """
 
-from . import claude_code, codex, vscode
 
-ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, vscode)}
+from . import claude_code, codex, opencode, cursor, vscode
+
+ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode, cursor, vscode)}

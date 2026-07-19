@@ -43,7 +43,7 @@ def main() -> None:
     output_dir = args.output_dir.expanduser().resolve()
     if not any(ADAPTERS[source].discover_sessions(path) for source, path in inputs.items()):
         paths = " or ".join(str(path) for path in inputs.values())
-        parser.error(f"No supported session transcripts found in {paths}")
+        parser.error(f"No session data found in {paths}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print("Analysing...")

@@ -1,6 +1,6 @@
 # agentrecap
 
-Generate a local, metadata-only HTML report from your Codex, Claude Code, and VS Code GitHub Copilot Chat sessions.
+Generate a local, metadata-only HTML report from your Codex, Claude Code, and Cursor sessions.
 
 ```bash
 uvx agentrecap
@@ -23,13 +23,13 @@ The local virtual environment keeps `agentrecap` and its dependencies separate f
 
 `agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
 
-By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, and VS Code chat sessions from the platform's standard VS Code user-data directory. It writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
+By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, and Cursor sessions from Cursor's user-data directory, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
 
 ```bash
 agentrecap \
   --codex-input /path/to/codex/home \
   --claude-input /path/to/claude/projects \
-  --vscode-input /path/to/Code/User \
+  --cursor-input /path/to/cursor/user-data \
   --output-dir /path/to/report \
   --title "My agent usage report"
 ```
@@ -37,7 +37,7 @@ agentrecap \
 The report includes:
 
 - Headline recent, month-to-date, and all-time estimated API costs alongside usage metrics.
-- Comparisons across Codex, Claude Code, and VS Code Chat.
+- Codex, Claude, and Cursor comparisons.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
 - Human-readable, metadata-only CSV files under the report's `data/` directory.
