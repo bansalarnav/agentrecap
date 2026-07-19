@@ -1,4 +1,4 @@
-"""Adapter for Cursor (AI editor) chat/composer sessions.
+"""Adapter for Cursor editor and CLI chat sessions.
 
 Cursor persists conversations in SQLite key-value stores:
 
@@ -20,7 +20,9 @@ tokens, and a ``modelType`` naming the serving model. Cursor is
 multi-provider, so the provider is inferred per event from the model name.
 
 Databases are always opened read-only (``mode=ro``) so the user's live Cursor
-state is never touched.
+state is never touched. Cursor CLI sessions are stored as JSONL transcripts
+under ``~/.cursor/projects/*/agent-transcripts``. Those transcripts contain
+messages and turn outcomes, but not model or token-usage metadata.
 """
 
 import json
@@ -34,6 +36,7 @@ from .common import (
     anonymous_id_or_none,
     event_sort_key,
     init_usage_fields,
+    read_jsonl_records,
     serialized_length,
     speed_status,
 )
@@ -45,7 +48,9 @@ SOURCE = "cursor"
 PROVIDER = "anthropic"
 DISPLAY_NAME = "Cursor"
 DEFAULT_INPUT = Path.home() / "Library" / "Application Support" / "Cursor" / "User"
-INPUT_HELP = "Cursor user-data directory containing globalStorage and workspaceStorage state.vscdb databases"
+INPUT_HELP = (
+    "Cursor user-data directory containing editor state.vscdb databases, or ~/.cursor"
+)
 
 # Substring -> models.dev provider id, checked in order against the
 # lowercased model name. OpenAI's o-series needs prefix checks to avoid
@@ -71,18 +76,32 @@ _TOOL_FAILURE_STATUSES = {"error", "errored", "failed", "failure", "cancelled", 
 def discover_sessions(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
-    if not path.exists():
+    default_cli_root = Path.home() / ".cursor"
+    if not path.exists() and not (path == DEFAULT_INPUT and default_cli_root.is_dir()):
         return []
     paths = []
-    global_db = path / "globalStorage" / "state.vscdb"
-    if global_db.is_file():
-        paths.append(global_db)
-    workspace_dir = path / "workspaceStorage"
-    if workspace_dir.is_dir():
-        paths.extend(sorted(workspace_dir.glob("*/state.vscdb")))
-    if not paths:
-        paths = sorted(path.rglob("state.vscdb"))
-    return paths
+    if path.is_dir():
+        global_db = path / "globalStorage" / "state.vscdb"
+        if global_db.is_file():
+            paths.append(global_db)
+        workspace_dir = path / "workspaceStorage"
+        if workspace_dir.is_dir():
+            paths.extend(sorted(workspace_dir.glob("*/state.vscdb")))
+        if not paths:
+            paths = sorted(path.rglob("state.vscdb"))
+
+    cli_root = None
+    if path.name == ".cursor":
+        cli_root = path
+    elif path == DEFAULT_INPUT:
+        cli_root = default_cli_root
+    elif (path / "projects").is_dir() and (path / "chats").is_dir():
+        cli_root = path
+    if cli_root is not None:
+        paths.extend(
+            sorted(cli_root.glob("projects/*/agent-transcripts/*/*.jsonl"))
+        )
+    return sorted(set(paths))
 
 
 def _read_json_kv(path: Path, table: str, like_patterns: tuple[str, ...]) -> dict:
@@ -217,9 +236,7 @@ def _base_event(thread_id: str, file_id: str, file_event_index: int) -> dict:
         "cumulative_output_tokens": None,
         "cumulative_cached_input_tokens": None,
         "cumulative_reasoning_output_tokens": None,
-        "cumulative_total_tokens": None,
         "reported_cost_usd": None,
-        "model_context_window": None,
         "text_length": None,
         "tool_input_length": None,
         "tool_output_length": None,
@@ -419,7 +436,167 @@ def _convert_legacy_chat(events: list[dict], chat_data: dict, path: Path, file_i
             events.append(event)
 
 
+def _cli_meta(path: Path, raw_thread_id: str) -> dict:
+    cursor_root = next((parent for parent in path.parents if parent.name == ".cursor"), None)
+    if cursor_root is None:
+        return {}
+    for meta_path in cursor_root.glob(f"chats/*/{raw_thread_id}/meta.json"):
+        try:
+            value = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _convert_cli_transcript(path: Path) -> list[dict]:
+    records = read_jsonl_records(path)
+    if not records:
+        return []
+
+    raw_thread_id = path.stem
+    thread_id = anonymous_id(f"cursor:{raw_thread_id}")
+    file_id = anonymous_id(f"cursor-file:{path}")
+    meta = _cli_meta(path, raw_thread_id)
+    created = _iso_timestamp(meta.get("createdAtMs"))
+    updated = _iso_timestamp(meta.get("updatedAtMs"))
+    user_turns = sum(record.get("role") == "user" for record in records)
+    events: list[dict] = []
+
+    def add_event(
+        record_index: int,
+        sub_index: int,
+        event_kind: str,
+        raw_event_type: str,
+        *,
+        timestamp: str | None = None,
+        text: object = None,
+        tool: dict | None = None,
+        run_end_status: str | None = None,
+    ) -> None:
+        event = _base_event(thread_id, file_id, len(events))
+        event.update(
+            {
+                "timestamp": timestamp,
+                "event_id": anonymous_id_or_none(
+                    "cursor-event", f"{raw_thread_id}:{record_index}:{sub_index}"
+                ),
+                "event_kind": event_kind,
+                "raw_event_type": raw_event_type,
+                "is_run_start": event_kind == "user_prompt",
+                "run_end_status": run_end_status,
+                "message_id": anonymous_id_or_none(
+                    "cursor-message", f"{raw_thread_id}:{record_index}"
+                ),
+                "text_length": serialized_length(text),
+            }
+        )
+        if event_kind == "run_end" and user_turns == 1:
+            created_ms = meta.get("createdAtMs")
+            updated_ms = meta.get("updatedAtMs")
+            if isinstance(created_ms, (int, float)) and isinstance(updated_ms, (int, float)):
+                event["duration_ms"] = max(updated_ms - created_ms, 0)
+        if tool is not None:
+            raw_tool_id = tool.get("toolCallId") or tool.get("id")
+            event["tool_call_id"] = anonymous_id_or_none("cursor-tool", raw_tool_id)
+            event["tool_name"] = tool.get("toolName") or tool.get("name")
+            event["tool_input_length"] = serialized_length(
+                tool.get("input") or tool.get("args")
+            )
+            event["tool_output_length"] = serialized_length(
+                tool.get("output") or tool.get("result")
+            )
+            event["tool_success"] = _tool_success(tool.get("status"))
+        events.append(event)
+
+    for record_index, record in enumerate(records):
+        role = record.get("role")
+        if role in {"user", "assistant"}:
+            message = record.get("message")
+            if not isinstance(message, dict):
+                message = {}
+            content = message.get("content")
+            if not isinstance(content, list):
+                content = [{"type": "text", "text": content}] if content is not None else []
+
+            if role == "user":
+                add_event(
+                    record_index,
+                    0,
+                    "user_prompt",
+                    "cli.message.user",
+                    timestamp=created if record_index == 0 else None,
+                    text=content,
+                )
+                continue
+
+            if not content:
+                add_event(record_index, 0, "other", "cli.message.assistant")
+                continue
+            for sub_index, item in enumerate(content):
+                if not isinstance(item, dict):
+                    item = {"type": "unknown", "value": item}
+                content_type = str(item.get("type") or "unknown").lower().replace("-", "_")
+                if content_type == "text":
+                    kind = "assistant_message"
+                    text = item.get("text")
+                elif content_type in {"reasoning", "thinking"}:
+                    kind = "reasoning"
+                    text = item.get("text") or item.get("value")
+                elif content_type in {"tool_call", "tool_use"}:
+                    kind = "tool_call"
+                    text = None
+                elif content_type in {"tool_result", "tool_output"}:
+                    kind = "tool_result"
+                    text = None
+                else:
+                    kind = "other"
+                    text = item
+                add_event(
+                    record_index,
+                    sub_index,
+                    kind,
+                    f"cli.message.assistant.{content_type}",
+                    text=text,
+                    tool=item if kind in {"tool_call", "tool_result"} else None,
+                )
+            continue
+
+        if record.get("type") == "turn_ended":
+            status = str(record.get("status") or "unknown").lower()
+            if status in {"success", "completed", "done"}:
+                run_end_status = "completed"
+            elif status in {"aborted", "cancelled", "canceled"}:
+                run_end_status = "aborted"
+            elif status == "unknown":
+                run_end_status = None
+            else:
+                run_end_status = "error"
+            add_event(
+                record_index,
+                0,
+                "run_end",
+                "cli.turn_ended",
+                timestamp=updated if record_index == len(records) - 1 else None,
+                run_end_status=run_end_status,
+            )
+            continue
+
+        add_event(
+            record_index,
+            0,
+            "other",
+            f"cli.{record.get('type') or 'unknown'}",
+        )
+
+    return events
+
+
 def convert_thread(path: Path) -> list[dict]:
+    if path.suffix == ".jsonl":
+        return _convert_cli_transcript(path)
+
     kv = _read_json_kv(path, "cursorDiskKV", ("composerData:%", "bubbleId:%"))
     items = _read_json_kv(path, "ItemTable", ("composer.composerData", "%aichat%chatdata%"))
     if not kv and not items:
@@ -460,14 +637,12 @@ def _mark_canonical(event: dict) -> None:
     event["usage_source"] = "bubble_token_count"
     event["call_served_input_tokens"] = served
     # Cursor reports a single per-bubble input total with no cache breakdown.
-    event["call_uncached_input_tokens"] = served
     event["call_cached_input_tokens"] = 0
     event["call_cache_creation_input_tokens"] = 0
     event["call_cache_creation_5m_input_tokens"] = 0
     event["call_cache_creation_1h_input_tokens"] = 0
     event["call_output_tokens"] = output
     event["call_reasoning_output_tokens"] = None
-    event["call_reasoning_tokens_available"] = False
 
 
 def finalize_events(events: list[dict]) -> list[dict]:

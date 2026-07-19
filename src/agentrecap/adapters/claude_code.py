@@ -197,13 +197,11 @@ def convert_thread(path: Path) -> list[dict]:
                     "cumulative_output_tokens": None,
                     "cumulative_cached_input_tokens": None,
                     "cumulative_reasoning_output_tokens": None,
-                    "cumulative_total_tokens": None,
                     "reported_cost_usd": (
                         usage_record.get("costUSD", record.get("costUSD"))
                         if include_usage
                         else None
                     ),
-                    "model_context_window": None,
                     "text_length": serialized_length(text),
                     "tool_input_length": serialized_length(tool_input),
                     "tool_output_length": serialized_length(tool_output),
@@ -376,7 +374,6 @@ def finalize_events(events: list[dict]) -> list[dict]:
         event["usage_canonical"] = True
         event["usage_source"] = "request_usage"
         event["call_served_input_tokens"] = uncached + cached + creation
-        event["call_uncached_input_tokens"] = uncached
         event["call_cached_input_tokens"] = cached
         event["call_cache_creation_input_tokens"] = creation
         event["call_cache_creation_5m_input_tokens"] = event.get("cache_creation_5m_input_tokens") or 0

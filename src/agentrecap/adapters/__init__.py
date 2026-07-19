@@ -26,6 +26,8 @@ and register it in ``ADAPTERS``.
 """
 
 
-from . import claude_code, codex, opencode, cursor, vscode
+from . import claude_code, codex, opencode
 
-ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode, cursor, vscode)}
+# Cursor and VS Code remain implemented but are intentionally not registered:
+# their local histories do not currently provide reliable token accounting.
+ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode)}

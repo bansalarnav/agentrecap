@@ -6,7 +6,6 @@ from pathlib import Path
 import pandas as pd
 
 from .adapters import ADAPTERS
-from .adapters.common import anonymous_id
 
 
 def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
@@ -15,13 +14,14 @@ def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
     for source, input_path in inputs.items():
         adapter = ADAPTERS[source]
         paths = adapter.discover_sessions(input_path)
-        thread_counts[source] = len(paths)
         source_events = []
         for path in paths:
             source_events.extend(adapter.convert_thread(path))
         # Canonical-usage marking needs every session of a source at once:
         # resumed/forked sessions duplicate calls across files.
-        all_events.extend(adapter.finalize_events(source_events))
+        source_events = adapter.finalize_events(source_events)
+        thread_counts[source] = len({event["thread_id"] for event in source_events})
+        all_events.extend(source_events)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     events_df = pd.DataFrame(all_events)
@@ -31,27 +31,6 @@ def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
             na_position="last",
         ).reset_index(drop=True)
         events_df["event_index"] = events_df.groupby(["source", "thread_id"]).cumcount()
-        events_df["row_id"] = [
-            anonymous_id(f"row:{source}:{file_id}:{file_event_index}")
-            for source, file_id, file_event_index in zip(
-                events_df["source"],
-                events_df["file_id"],
-                events_df["file_event_index"],
-                strict=False,
-            )
-        ]
-        call_speeds = events_df.loc[
-            events_df["usage_kind"].notna() & events_df["total_tokens"].fillna(0).gt(0),
-            ["source", "thread_id", "speed"],
-        ]
-        thread_speeds = {}
-        for key, group in call_speeds.groupby(["source", "thread_id"]):
-            values = set(group["speed"].fillna("unknown"))
-            thread_speeds[key] = next(iter(values)) if len(values) == 1 else "mixed"
-        events_df["thread_speed_status"] = [
-            thread_speeds.get((source, thread_id), "unknown")
-            for source, thread_id in zip(events_df["source"], events_df["thread_id"], strict=False)
-        ]
 
     events_df.to_csv(output, index=False)
     return {

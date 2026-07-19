@@ -40,14 +40,12 @@ USAGE_FINALIZE_FIELDS = {
     "usage_dedup_reason": None,
     "usage_source": None,
     "call_served_input_tokens": None,
-    "call_uncached_input_tokens": None,
     "call_cached_input_tokens": None,
     "call_cache_creation_input_tokens": None,
     "call_cache_creation_5m_input_tokens": None,
     "call_cache_creation_1h_input_tokens": None,
     "call_output_tokens": None,
     "call_reasoning_output_tokens": None,
-    "call_reasoning_tokens_available": False,
 }
 
 

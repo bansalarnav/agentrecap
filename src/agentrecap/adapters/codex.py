@@ -207,9 +207,7 @@ def convert_thread(path: Path) -> list[dict]:
                 "cumulative_output_tokens": total_usage.get("output_tokens"),
                 "cumulative_cached_input_tokens": total_usage.get("cached_input_tokens"),
                 "cumulative_reasoning_output_tokens": total_usage.get("reasoning_output_tokens"),
-                "cumulative_total_tokens": total_usage.get("total_tokens"),
                 "reported_cost_usd": None,
-                "model_context_window": info.get("model_context_window") or payload.get("model_context_window"),
                 "text_length": serialized_length(content),
                 "tool_input_length": serialized_length(tool_input),
                 "tool_output_length": serialized_length(tool_output),
@@ -274,16 +272,12 @@ def finalize_events(events: list[dict]) -> list[dict]:
             event["usage_canonical"] = True
             event["usage_source"] = "cumulative_ledger_delta"
             event["call_served_input_tokens"] = served
-            event["call_uncached_input_tokens"] = max(served - cached, 0)
             event["call_cached_input_tokens"] = cached
             event["call_cache_creation_input_tokens"] = 0
             event["call_cache_creation_5m_input_tokens"] = 0
             event["call_cache_creation_1h_input_tokens"] = 0
             event["call_output_tokens"] = output
             event["call_reasoning_output_tokens"] = deltas["cumulative_reasoning_output_tokens"]
-            event["call_reasoning_tokens_available"] = (
-                event.get("cumulative_reasoning_output_tokens") is not None
-            )
 
     snapshot_events = sorted(
         (
@@ -321,14 +315,12 @@ def finalize_events(events: list[dict]) -> list[dict]:
         event["usage_canonical"] = True
         event["usage_source"] = "deduplicated_last_snapshot"
         event["call_served_input_tokens"] = served
-        event["call_uncached_input_tokens"] = max(served - cached, 0)
         event["call_cached_input_tokens"] = cached
         event["call_cache_creation_input_tokens"] = 0
         event["call_cache_creation_5m_input_tokens"] = 0
         event["call_cache_creation_1h_input_tokens"] = 0
         event["call_output_tokens"] = output
         event["call_reasoning_output_tokens"] = event.get("reasoning_output_tokens")
-        event["call_reasoning_tokens_available"] = event.get("reasoning_output_tokens") is not None
 
     for event in events:
         if (

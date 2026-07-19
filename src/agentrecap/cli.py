@@ -42,8 +42,7 @@ def main() -> None:
     }
     output_dir = args.output_dir.expanduser().resolve()
     if not any(ADAPTERS[source].discover_sessions(path) for source, path in inputs.items()):
-        paths = " or ".join(str(path) for path in inputs.values())
-        parser.error(f"No session data found in {paths}")
+        parser.error("No coding agent sessions found on this machine")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     print("Analysing...")

@@ -1,6 +1,6 @@
 # agentrecap
 
-Generate a local, metadata-only HTML report from your Codex, Claude Code, and Cursor sessions.
+Generate a local, metadata-only HTML report from your Codex, Claude Code, and OpenCode sessions.
 
 ```bash
 uvx agentrecap
@@ -23,13 +23,13 @@ The local virtual environment keeps `agentrecap` and its dependencies separate f
 
 `agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
 
-By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, and Cursor sessions from Cursor's user-data directory, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
+By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, and OpenCode sessions from `~/.local/share/opencode`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
 
 ```bash
 agentrecap \
   --codex-input /path/to/codex/home \
   --claude-input /path/to/claude/projects \
-  --cursor-input /path/to/cursor/user-data \
+  --opencode-input /path/to/opencode/data \
   --output-dir /path/to/report \
   --title "My agent usage report"
 ```
@@ -37,14 +37,14 @@ agentrecap \
 The report includes:
 
 - Headline recent, month-to-date, and all-time estimated API costs alongside usage metrics.
-- Codex, Claude, and Cursor comparisons.
+- Codex, Claude, and OpenCode comparisons.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
 - Human-readable, metadata-only CSV files under the report's `data/` directory.
 
 The generated report does not include transcript contents. Thread, run, event, agent, and tool-call identifiers are hashed before they are written.
 
-The report's `data/threads.csv` is the complete metadata-only event export used to generate every analysis table, in a schema that is fully standardized across sources: every row is tagged with its `source`, pricing `provider`, and `model`, and carries an `event_kind` from a closed vocabulary (`user_prompt`, `assistant_message`, `reasoning`, `tool_call`, `tool_result`, `run_end`, `other`) with the tool's own event name preserved in `raw_event_type`. Run boundaries (`is_run_start`, `run_end_status`) are computed by the source adapters, so nothing downstream of this file contains source-specific logic. It retains per-request token categories, hashed message/request identities, explicit speed and service-tier metadata, Claude's nullable reported cost, and a `thread_speed_status` of `standard`, `fast`, `mixed`, or `unknown`. Each source adapter also marks which rows count as real model calls: `usage_canonical` flags the canonical copy of each call and fills normalized `call_*` token columns, while duplicate or superseded rows are kept with a `usage_dedup_reason` (for example a resumed session replaying earlier usage, or a repeated cumulative token snapshot) so dedup decisions stay auditable and re-runnable. The one-row-per-thread aggregate is written separately as `data/thread_summary.csv`; the canonical per-call pricing inputs and estimates are in `data/model_calls.csv`.
+The report's `data/threads.csv` is the complete metadata-only event export used to generate every analysis table, in a schema that is fully standardized across sources: every row is tagged with its `source`, pricing `provider`, and `model`, and carries an `event_kind` from a closed vocabulary (`user_prompt`, `assistant_message`, `reasoning`, `tool_call`, `tool_result`, `run_end`, `other`) with the tool's own event name preserved in `raw_event_type`. Run boundaries (`is_run_start`, `run_end_status`) are computed by the source adapters, so nothing downstream of this file contains source-specific logic. It retains per-request token categories, hashed message/request identities, explicit speed and service-tier metadata, and nullable source-reported costs. Each source adapter also marks which rows count as real model calls: `usage_canonical` flags the canonical copy of each call and fills normalized `call_*` token columns, while duplicate or superseded rows are kept with a `usage_dedup_reason` (for example a resumed session replaying earlier usage, or a repeated cumulative token snapshot) so dedup decisions stay auditable and re-runnable. The one-row-per-thread aggregate is written separately as `data/thread_summary.csv`; the canonical per-call pricing inputs and estimates are in `data/model_calls.csv`.
 
 ## Cost estimates
 
@@ -55,9 +55,6 @@ Every request is priced before model and month totals are aggregated. Estimates 
 Explicit historical `fast`/priority metadata uses the provider's fast-mode price from models.dev; `default` is treated as standard. When a historical record has no speed metadata, it remains `unknown` and is estimated at the standard API rate as a clearly marked fallback—today's local configuration is never applied retroactively. Claude's raw top-level `costUSD`, when present, is retained only as `reported_cost_usd` provenance. All report cards, tables, monthly totals, and displayed exports use the independently calculated `estimated_cost_usd`.
 
 These are API-equivalent token estimates, not ChatGPT, Codex, Claude, or Claude Code subscription spend or credit consumption. They do not include negotiated discounts, batch pricing, or provider/platform charges not represented in the logs. Unknown model IDs and fast modes without an explicit catalog price remain unpriced rather than receiving a guessed rate.
-
-VS Code chat session files do not record token usage, so VS Code model calls and cost estimates are unavailable. Its prompts, responses, tools, timings, and run outcomes still appear in the other report metrics.
-
 
 ## Development
 

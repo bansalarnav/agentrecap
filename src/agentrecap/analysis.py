@@ -48,14 +48,12 @@ REQUIRED_COLUMNS = {
     "usage_dedup_reason",
     "usage_source",
     "call_served_input_tokens",
-    "call_uncached_input_tokens",
     "call_cached_input_tokens",
     "call_cache_creation_input_tokens",
     "call_cache_creation_5m_input_tokens",
     "call_cache_creation_1h_input_tokens",
     "call_output_tokens",
     "call_reasoning_output_tokens",
-    "call_reasoning_tokens_available",
     "reported_cost_usd",
 }
 
@@ -72,7 +70,7 @@ def load_events(path: Path) -> pd.DataFrame:
 
     events = events.copy()
     events["timestamp"] = pd.to_datetime(events["timestamp"], utc=True, errors="coerce")
-    for column in ["is_sidechain", "is_run_start", "usage_canonical", "call_reasoning_tokens_available"]:
+    for column in ["is_sidechain", "is_run_start", "usage_canonical"]:
         events[column] = events[column].eq(True)
     events["is_user_prompt"] = events["event_kind"].eq("user_prompt")
     events["is_top_level_user_prompt"] = events["is_user_prompt"] & ~events["is_sidechain"]
@@ -145,16 +143,20 @@ def build_model_calls(events: pd.DataFrame) -> pd.DataFrame:
     calls = calls.rename(
         columns={
             "call_served_input_tokens": "served_input_tokens",
-            "call_uncached_input_tokens": "uncached_input_tokens",
             "call_cached_input_tokens": "cached_input_tokens",
             "call_cache_creation_input_tokens": "cache_creation_input_tokens",
             "call_cache_creation_5m_input_tokens": "cache_creation_5m_input_tokens",
             "call_cache_creation_1h_input_tokens": "cache_creation_1h_input_tokens",
             "call_output_tokens": "output_tokens",
             "call_reasoning_output_tokens": "reasoning_output_tokens",
-            "call_reasoning_tokens_available": "reasoning_tokens_available",
         }
     )
+    calls["uncached_input_tokens"] = (
+        calls["served_input_tokens"]
+        - calls["cached_input_tokens"]
+        - calls["cache_creation_input_tokens"]
+    ).clip(lower=0)
+    calls["reasoning_tokens_available"] = calls["reasoning_output_tokens"].notna()
     calls["non_reasoning_output_tokens"] = (
         calls["output_tokens"] - calls["reasoning_output_tokens"]
     ).clip(lower=0)

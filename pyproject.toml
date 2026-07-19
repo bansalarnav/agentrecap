@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agentrecap"
 version = "0.2.1"
-description = "Analyze local Codex, Claude Code, and VS Code Copilot Chat sessions"
+description = "Analyze local Codex, Claude Code, and OpenCode sessions"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

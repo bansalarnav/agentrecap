@@ -1,8 +1,10 @@
 """Adapter for OpenCode session storage."""
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from .common import (
     anonymous_id,
@@ -17,7 +19,7 @@ PROVIDER = "opencode"
 DISPLAY_NAME = "OpenCode"
 DEFAULT_INPUT = Path.home() / ".local" / "share" / "opencode"
 INPUT_HELP = (
-    "OpenCode data directory, containing storage/session, storage/message, and storage/part"
+    "OpenCode data directory containing opencode.db or the legacy storage directory"
 )
 
 # OpenCode provider IDs normally match models.dev. These aliases cover older
@@ -35,6 +37,10 @@ def discover_sessions(path: Path) -> list[Path]:
         return [path]
     if not path.exists():
         return []
+
+    database = path / "opencode.db"
+    if database.is_file():
+        return [database]
 
     candidates = (path / "storage" / "session", path / "session", path)
     session_dir = next((candidate for candidate in candidates if candidate.is_dir()), None)
@@ -79,19 +85,13 @@ def _provider(value: object) -> str:
     return PROVIDER_ALIASES.get(provider, provider)
 
 
-def convert_thread(path: Path) -> list[dict]:
+def _convert_json_thread(path: Path) -> list[dict]:
     session = _read_json(path)
     storage_dir = _storage_dir(path)
     if session is None or storage_dir is None:
         return []
 
     raw_thread_id = str(session.get("id") or path.stem)
-    thread_id = anonymous_id(f"opencode:{raw_thread_id}")
-    file_id = anonymous_id(f"opencode-file:{path}")
-    raw_parent_thread_id = session.get("parentID")
-    parent_thread_id = anonymous_id_or_none("opencode", raw_parent_thread_id)
-    is_sidechain = raw_parent_thread_id is not None
-
     message_dir = storage_dir / "message" / raw_thread_id
     messages = []
     if message_dir.is_dir():
@@ -99,6 +99,101 @@ def convert_thread(path: Path) -> list[dict]:
             message = _read_json(message_path)
             if message is not None:
                 messages.append(message)
+
+    parts_by_message = {}
+    for message in messages:
+        raw_message_id = message.get("id")
+        part_dir = storage_dir / "part" / str(raw_message_id)
+        parts = []
+        if part_dir.is_dir():
+            for part_path in part_dir.glob("*.json"):
+                part = _read_json(part_path)
+                if part is not None:
+                    parts.append(part)
+        parts_by_message[str(raw_message_id)] = parts
+
+    return _convert_session(session, messages, parts_by_message, str(path))
+
+
+def _convert_database(path: Path) -> list[dict]:
+    uri = f"file:{quote(str(path), safe='/:')}?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True)
+        session_rows = connection.execute(
+            "SELECT id, parent_id, time_created, time_updated FROM session"
+        ).fetchall()
+        message_rows = connection.execute(
+            "SELECT id, session_id, time_created, data FROM message"
+        ).fetchall()
+        part_rows = connection.execute(
+            "SELECT id, message_id, session_id, time_created, data FROM part"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+    sessions = {
+        session_id: {
+            "id": session_id,
+            "parentID": parent_id,
+            "time": {"created": created, "updated": updated},
+        }
+        for session_id, parent_id, created, updated in session_rows
+    }
+    messages_by_session: dict[str, list[dict]] = {}
+    for message_id, session_id, created, data in message_rows:
+        try:
+            message = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(message, dict):
+            continue
+        message["id"] = message_id
+        message.setdefault("sessionID", session_id)
+        message.setdefault("time", {"created": created})
+        messages_by_session.setdefault(session_id, []).append(message)
+
+    parts_by_session: dict[str, dict[str, list[dict]]] = {}
+    for part_id, message_id, session_id, created, data in part_rows:
+        try:
+            part = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(part, dict):
+            continue
+        part["id"] = part_id
+        part.setdefault("messageID", message_id)
+        part["_storage_time_created"] = created
+        parts_by_session.setdefault(session_id, {}).setdefault(message_id, []).append(part)
+
+    events = []
+    for session_id, session in sessions.items():
+        events.extend(
+            _convert_session(
+                session,
+                messages_by_session.get(session_id, []),
+                parts_by_session.get(session_id, {}),
+                f"{path}:{session_id}",
+            )
+        )
+    return events
+
+
+def _convert_session(
+    session: dict,
+    messages: list[dict],
+    parts_by_message: dict[str, list[dict]],
+    file_identity: str,
+) -> list[dict]:
+    raw_thread_id = str(session.get("id") or file_identity)
+    thread_id = anonymous_id(f"opencode:{raw_thread_id}")
+    file_id = anonymous_id(f"opencode-file:{file_identity}")
+    raw_parent_thread_id = session.get("parentID")
+    parent_thread_id = anonymous_id_or_none("opencode", raw_parent_thread_id)
+    is_sidechain = raw_parent_thread_id is not None
+
     messages.sort(
         key=lambda message: (
             (message.get("time") or {}).get("created") or 0,
@@ -159,9 +254,7 @@ def convert_thread(path: Path) -> list[dict]:
             "cumulative_output_tokens": None,
             "cumulative_cached_input_tokens": None,
             "cumulative_reasoning_output_tokens": None,
-            "cumulative_total_tokens": None,
             "reported_cost_usd": None,
-            "model_context_window": None,
             "text_length": None,
             "tool_input_length": None,
             "tool_output_length": None,
@@ -219,14 +312,13 @@ def convert_thread(path: Path) -> list[dict]:
             message_id=message_id,
         )
 
-        part_dir = storage_dir / "part" / str(raw_message_id)
-        parts = []
-        if part_dir.is_dir():
-            for part_path in part_dir.glob("*.json"):
-                part = _read_json(part_path)
-                if part is not None:
-                    parts.append(part)
-        parts.sort(key=lambda part: part.get("id") or "")
+        parts = parts_by_message.get(str(raw_message_id), [])
+        parts.sort(
+            key=lambda part: (
+                part.get("_storage_time_created") or 0,
+                part.get("id") or "",
+            )
+        )
 
         for part in parts:
             part_type = part.get("type") or "unknown"
@@ -308,6 +400,12 @@ def convert_thread(path: Path) -> list[dict]:
     return events
 
 
+def convert_thread(path: Path) -> list[dict]:
+    if path.name == "opencode.db":
+        return _convert_database(path)
+    return _convert_json_thread(path)
+
+
 def finalize_events(events: list[dict]) -> list[dict]:
     """Mark each distinct step-finish part as one canonical model call."""
     init_usage_fields(events)
@@ -336,12 +434,10 @@ def finalize_events(events: list[dict]) -> list[dict]:
         event["usage_canonical"] = True
         event["usage_source"] = "step_finish_usage"
         event["call_served_input_tokens"] = uncached + cached + creation
-        event["call_uncached_input_tokens"] = uncached
         event["call_cached_input_tokens"] = cached
         event["call_cache_creation_input_tokens"] = creation
         event["call_cache_creation_5m_input_tokens"] = 0
         event["call_cache_creation_1h_input_tokens"] = 0
         event["call_output_tokens"] = output
         event["call_reasoning_output_tokens"] = reasoning
-        event["call_reasoning_tokens_available"] = reasoning is not None
     return events
