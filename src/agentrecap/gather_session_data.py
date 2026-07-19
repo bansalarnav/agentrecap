@@ -1,4 +1,4 @@
-"""Gather metadata from Codex and Claude session files."""
+"""Gather metadata from supported coding-agent session files."""
 
 import argparse
 from pathlib import Path
