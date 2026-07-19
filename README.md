@@ -1,6 +1,6 @@
 # agentrecap
 
-Generate a local, metadata-only HTML report from your Codex and Claude Code sessions.
+Generate a local, metadata-only HTML report from your Codex, Claude Code, and VS Code GitHub Copilot Chat sessions.
 
 ```bash
 uvx agentrecap
@@ -23,12 +23,13 @@ The local virtual environment keeps `agentrecap` and its dependencies separate f
 
 `agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
 
-By default, `agentrecap` reads active and archived sessions from `~/.codex` and Claude Code sessions from `~/.claude/projects`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
+By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, and VS Code chat sessions from the platform's standard VS Code user-data directory. It writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
 
 ```bash
 agentrecap \
   --codex-input /path/to/codex/home \
   --claude-input /path/to/claude/projects \
+  --vscode-input /path/to/Code/User \
   --output-dir /path/to/report \
   --title "My agent usage report"
 ```
@@ -36,7 +37,7 @@ agentrecap \
 The report includes:
 
 - Headline recent, month-to-date, and all-time estimated API costs alongside usage metrics.
-- Codex and Claude comparisons.
+- Comparisons across Codex, Claude Code, and VS Code Chat.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
 - Human-readable, metadata-only CSV files under the report's `data/` directory.
@@ -54,6 +55,8 @@ Every request is priced before model and month totals are aggregated. Estimates 
 Explicit historical `fast`/priority metadata uses the provider's fast-mode price from models.dev; `default` is treated as standard. When a historical record has no speed metadata, it remains `unknown` and is estimated at the standard API rate as a clearly marked fallback—today's local configuration is never applied retroactively. Claude's raw top-level `costUSD`, when present, is retained only as `reported_cost_usd` provenance. All report cards, tables, monthly totals, and displayed exports use the independently calculated `estimated_cost_usd`.
 
 These are API-equivalent token estimates, not ChatGPT, Codex, Claude, or Claude Code subscription spend or credit consumption. They do not include negotiated discounts, batch pricing, or provider/platform charges not represented in the logs. Unknown model IDs and fast modes without an explicit catalog price remain unpriced rather than receiving a guessed rate.
+
+VS Code chat session files do not record token usage, so VS Code model calls and cost estimates are unavailable. Its prompts, responses, tools, timings, and run outcomes still appear in the other report metrics.
 
 
 ## Development
