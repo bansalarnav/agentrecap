@@ -6,6 +6,7 @@ threads.csv branches on the source. Each adapter module exposes:
 - ``SOURCE``: the value written to the ``source`` column of the events table
 - ``PROVIDER``: models.dev provider id used for pricing (e.g. ``anthropic``)
 - ``DISPLAY_NAME``: human-readable tool name for CLI output
+- ``GRAPH_COLOR``: Matplotlib color used for the tool in report charts
 - ``DEFAULT_INPUT``: default directory holding the tool's session files
 - ``INPUT_HELP``: help text for the tool's ``--<source>-input`` CLI flag
 - ``discover_sessions(path)``: find session files under an input path

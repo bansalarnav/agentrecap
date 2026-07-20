@@ -9,18 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-
-PALETTE = [
-    "tab:blue",
-    "tab:orange",
-    "tab:green",
-    "tab:red",
-    "tab:purple",
-    "tab:brown",
-    "tab:pink",
-    "tab:olive",
-    "tab:cyan",
-]
+from .adapters import ADAPTERS
 
 # Every chart make_plots can produce: filename -> (report heading, description).
 # The report renders whichever of these exist after a run, in this order.
@@ -41,10 +30,9 @@ CHARTS = {
 }
 
 
-def assign_source_colors(sources) -> dict:
-    """Stable color per source, assigned alphabetically so every chart in a
-    report uses the same mapping regardless of which sources are present."""
-    return {source: PALETTE[i % len(PALETTE)] for i, source in enumerate(sorted(sources))}
+def assign_source_colors(sources) -> dict[str, str]:
+    """Use the graph color declared by each source adapter."""
+    return {source: ADAPTERS[source].GRAPH_COLOR for source in sources}
 
 
 def plot_ecdf(frame: pd.DataFrame, column: str, title: str, xlabel: str, path: Path, colors: dict, log_x=False):

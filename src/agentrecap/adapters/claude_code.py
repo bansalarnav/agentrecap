@@ -17,6 +17,7 @@ from .common import (
 SOURCE = "claude"
 PROVIDER = "anthropic"
 DISPLAY_NAME = "Claude Code"
+GRAPH_COLOR = "tab:orange"
 DEFAULT_INPUT = Path.home() / ".claude" / "projects"
 INPUT_HELP = "Claude Code projects directory"
 

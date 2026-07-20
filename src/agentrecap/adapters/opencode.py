@@ -19,6 +19,7 @@ from .common import (
 SOURCE = "opencode"
 PROVIDER = "opencode"
 DISPLAY_NAME = "OpenCode"
+GRAPH_COLOR = "black"
 DEFAULT_INPUT = Path.home() / ".local" / "share" / "opencode"
 INPUT_HELP = (
     "OpenCode data directory containing opencode.db or the legacy storage directory"

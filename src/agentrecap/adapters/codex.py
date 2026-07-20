@@ -17,6 +17,7 @@ from .common import (
 SOURCE = "codex"
 PROVIDER = "openai"
 DISPLAY_NAME = "Codex"
+GRAPH_COLOR = "tab:blue"
 DEFAULT_INPUT = Path.home() / ".codex"
 INPUT_HELP = "Codex home directory, including active and archived sessions"
 
@@ -85,10 +86,25 @@ def convert_thread(path: Path) -> list[dict]:
     raw_thread_id = str(meta.get("id") or meta.get("session_id") or path.name)
     thread_id = anonymous_id(f"codex:{raw_thread_id}")
     file_id = anonymous_id(f"codex-file:{path}")
-    parent_thread_id = anonymous_id_or_none("codex", meta.get("parent_thread_id") or meta.get("forked_from_id"))
     thread_source = meta.get("thread_source")
     source = meta.get("source") or {}
-    is_sidechain = (isinstance(source, dict) and bool(source.get("subagent"))) or thread_source == "subagent"
+    subagent_source = source.get("subagent") if isinstance(source, dict) else None
+    thread_spawn = (
+        subagent_source.get("thread_spawn")
+        if isinstance(subagent_source, dict)
+        else None
+    )
+    raw_parent_thread_id = (
+        meta.get("parent_thread_id")
+        or meta.get("forked_from_id")
+        or (
+            thread_spawn.get("parent_thread_id")
+            if isinstance(thread_spawn, dict)
+            else None
+        )
+    )
+    parent_thread_id = anonymous_id_or_none("codex", raw_parent_thread_id)
+    is_sidechain = bool(subagent_source) or thread_source == "subagent"
     model = None
     reasoning_effort = None
     service_tier = None
@@ -229,16 +245,49 @@ def finalize_events(events: list[dict]) -> list[dict]:
     by_thread: dict[str, list[dict]] = {}
     for event in ledger_events:
         by_thread.setdefault(event["thread_id"], []).append(event)
+
+    snapshots_by_thread = {
+        thread_id: {
+            tuple(event.get(key) for key in CUMULATIVE_KEYS)
+            for event in thread_events
+        }
+        for thread_id, thread_events in by_thread.items()
+    }
+
     for thread_events in by_thread.values():
         thread_events.sort(key=event_sort_key)
-        seen: set[tuple] = set()
+        parent_thread_ids = {
+            event["parent_thread_id"]
+            for event in thread_events
+            if event.get("parent_thread_id")
+        }
+        parent_snapshots = set().union(
+            *(snapshots_by_thread.get(thread_id, set()) for thread_id in parent_thread_ids)
+        )
+        in_replay_prefix = bool(parent_snapshots)
+        seen_observations: set[tuple] = set()
         previous = None
         for event in thread_events:
-            snapshot = (event.get("model"), *(event.get(key) for key in CUMULATIVE_KEYS))
-            if snapshot in seen:
+            cumulative_snapshot = tuple(event.get(key) for key in CUMULATIVE_KEYS)
+
+            # Forked Codex rollouts can begin with the parent's full cumulative
+            # ledger. Preserve the last replayed value as the child's baseline,
+            # but do not count any of that copied prefix as new API traffic.
+            if in_replay_prefix and cumulative_snapshot in parent_snapshots:
+                event["usage_dedup_reason"] = "fork_replay_baseline"
+                previous = event
+                continue
+            in_replay_prefix = False
+
+            observation = (
+                event.get("timestamp"),
+                event.get("model"),
+                *cumulative_snapshot,
+            )
+            if observation in seen_observations:
                 event["usage_dedup_reason"] = "duplicate_cumulative_snapshot"
                 continue
-            seen.add(snapshot)
+            seen_observations.add(observation)
             deltas = {}
             for key in CUMULATIVE_KEYS:
                 raw = event.get(key)
