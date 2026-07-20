@@ -309,8 +309,13 @@ def _convert_session(
             cached_tokens = cache.get("read") if has_usage else None
             cache_creation_tokens = cache.get("write") if has_usage else None
             reasoning_tokens = tokens.get("reasoning") if has_usage else None
-            total_tokens = None
-            if has_usage:
+            total_tokens = tokens.get("total") if has_usage else None
+            if total_tokens is not None:
+                # Newer OpenCode records report visible output and reasoning
+                # separately. Older records omit total and include reasoning in
+                # output already.
+                output_tokens = (output_tokens or 0) + (reasoning_tokens or 0)
+            elif has_usage:
                 total_tokens = sum(
                     value or 0
                     for value in (
