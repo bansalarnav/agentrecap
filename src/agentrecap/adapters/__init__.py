@@ -21,13 +21,31 @@ threads.csv branches on the source. Each adapter module exposes:
   and fill the normalized ``call_*`` usage columns. Runs across all files at
   once because resumed/forked sessions duplicate calls between files.
 
-To support a new tool (e.g. opencode), add a module implementing this interface
-and register it in ``ADAPTERS``.
+To support a new tool, add a module implementing this interface and register
+it in ``ADAPTERS``.
 """
 
+import argparse
+from pathlib import Path
 
 from . import claude_code, codex, opencode
 
 # Cursor and VS Code remain implemented but are intentionally not registered:
 # their local histories do not currently provide reliable token accounting.
 ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode)}
+
+
+def add_input_arguments(parser: argparse.ArgumentParser) -> None:
+    """Register one --<source>-input flag per registered adapter."""
+    for source, adapter in ADAPTERS.items():
+        parser.add_argument(
+            f"--{source}-input",
+            type=Path,
+            default=adapter.DEFAULT_INPUT,
+            help=adapter.INPUT_HELP,
+        )
+
+
+def inputs_from_args(args: argparse.Namespace) -> dict[str, Path]:
+    """Collect the per-source input paths parsed by add_input_arguments."""
+    return {source: getattr(args, f"{source}_input") for source in ADAPTERS}

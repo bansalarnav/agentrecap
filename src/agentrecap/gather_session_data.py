@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .adapters import ADAPTERS
+from .adapters import ADAPTERS, add_input_arguments, inputs_from_args
 
 
 def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
@@ -41,18 +41,11 @@ def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert agent sessions to a metadata-only CSV file.")
-    for source, adapter in ADAPTERS.items():
-        parser.add_argument(
-            f"--{source}-input",
-            type=Path,
-            default=adapter.DEFAULT_INPUT,
-            help=adapter.INPUT_HELP,
-        )
+    add_input_arguments(parser)
     parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.csv")
     args = parser.parse_args()
 
-    inputs = {source: getattr(args, f"{source}_input") for source in ADAPTERS}
-    result = convert_sessions(inputs, args.output)
+    result = convert_sessions(inputs_from_args(args), args.output)
     summary = " and ".join(
         f"{count} {ADAPTERS[source].DISPLAY_NAME} threads"
         for source, count in result["threads"].items()

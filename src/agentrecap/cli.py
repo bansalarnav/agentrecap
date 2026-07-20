@@ -5,7 +5,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from .adapters import ADAPTERS
+from .adapters import ADAPTERS, add_input_arguments, inputs_from_args
 from .report import build_report, run_pipeline
 
 
@@ -19,13 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Analyze local coding-agent sessions and create an offline HTML report."
     )
-    for source, adapter in ADAPTERS.items():
-        parser.add_argument(
-            f"--{source}-input",
-            type=Path,
-            default=adapter.DEFAULT_INPUT,
-            help=adapter.INPUT_HELP,
-        )
+    add_input_arguments(parser)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -37,8 +31,8 @@ def main() -> None:
     args = parser.parse_args()
 
     inputs = {
-        source: getattr(args, f"{source}_input").expanduser().resolve()
-        for source in ADAPTERS
+        source: path.expanduser().resolve()
+        for source, path in inputs_from_args(args).items()
     }
     output_dir = args.output_dir.expanduser().resolve()
     if not any(ADAPTERS[source].discover_sessions(path) for source, path in inputs.items()):

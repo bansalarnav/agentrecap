@@ -21,9 +21,9 @@ from pathlib import Path
 from .common import (
     anonymous_id,
     anonymous_id_or_none,
+    base_event,
     init_usage_fields,
     serialized_length,
-    speed_status,
 )
 
 SOURCE = "vscode"
@@ -94,56 +94,23 @@ def _model_for_request(request: dict) -> str | None:
 
 
 def _base_event(context: dict, event_kind: str, raw_event_type: str) -> dict:
-    return {
-        "source": SOURCE,
-        "provider": PROVIDER,
-        "thread_id": context["thread_id"],
-        "stream_id": "main",
-        "file_id": context["file_id"],
-        "file_event_index": None,
-        "event_index": None,
-        "timestamp": context["timestamp"],
-        "event_id": None,
-        "parent_event_id": None,
-        "agent_id": None,
-        "is_sidechain": False,
-        "parent_thread_id": None,
-        "child_thread_id": None,
-        "spawned_by_event_id": None,
-        "event_kind": event_kind,
-        "raw_event_type": raw_event_type,
-        "is_run_start": False,
-        "run_end_status": None,
-        "duration_ms": None,
-        "time_to_first_token_ms": None,
-        "model": context["model"],
-        "reasoning_effort": None,
-        "speed": speed_status(None, None),
-        "service_tier": None,
-        "inference_geo": None,
-        "message_id": None,
-        "request_id": context["request_id"],
-        "tool_call_id": None,
-        "tool_name": None,
-        "tool_success": None,
-        "usage_kind": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "cache_creation_input_tokens": None,
-        "cache_creation_5m_input_tokens": None,
-        "cache_creation_1h_input_tokens": None,
-        "reasoning_output_tokens": None,
-        "total_tokens": None,
-        "cumulative_input_tokens": None,
-        "cumulative_output_tokens": None,
-        "cumulative_cached_input_tokens": None,
-        "cumulative_reasoning_output_tokens": None,
-        "reported_cost_usd": None,
-        "text_length": None,
-        "tool_input_length": None,
-        "tool_output_length": None,
-    }
+    """One standardized event carrying the request's shared context.
+
+    ``file_event_index`` stays None here; convert_thread assigns the final
+    ordering once every event for the session has been emitted.
+    """
+    return base_event(
+        SOURCE,
+        PROVIDER,
+        context["thread_id"],
+        context["file_id"],
+        None,
+        timestamp=context["timestamp"],
+        event_kind=event_kind,
+        raw_event_type=raw_event_type,
+        model=context["model"],
+        request_id=context["request_id"],
+    )
 
 
 def _response_part_events(context: dict, part: object) -> list[dict]:

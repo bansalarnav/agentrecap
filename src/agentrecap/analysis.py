@@ -8,14 +8,23 @@ from .plots import make_plots
 
 
 def safe_ratio(numerator: pd.Series | float, denominator: pd.Series | float):
-    return numerator / denominator.replace(0, np.nan) if isinstance(denominator, pd.Series) else (
-        numerator / denominator if denominator else np.nan
-    )
+    if isinstance(denominator, pd.Series):
+        return numerator / denominator.replace(0, np.nan)
+    return numerator / denominator if denominator else np.nan
 
 
 def percentile(series: pd.Series, value: float) -> float:
     values = series.dropna()
     return values.quantile(value) if not values.empty else np.nan
+
+
+def nullable_sum(values: pd.Series):
+    """Sum that stays NaN when every observation is missing."""
+    return values.sum(min_count=1)
+
+
+def count_false(values: pd.Series) -> int:
+    return values.eq(False).sum()
 
 
 REQUIRED_COLUMNS = {
@@ -60,6 +69,77 @@ REQUIRED_COLUMNS = {
 # The model's own activity within a run; its latest timestamp is when the model
 # stopped emitting output.
 ASSISTANT_ACTIVITY_KINDS = ["assistant_message", "reasoning", "tool_call"]
+
+# Token totals summed at every aggregation level (run, thread, model).
+TOKEN_SUM_COLUMNS = [
+    "served_input_tokens",
+    "uncached_input_tokens",
+    "cached_input_tokens",
+    "cache_creation_input_tokens",
+    "cache_creation_5m_input_tokens",
+    "cache_creation_1h_input_tokens",
+    "output_tokens",
+]
+
+# Aggregated counts that become 0 (not NaN) when a group has no observations.
+COUNT_COLUMNS = [
+    "model_calls",
+    "reasoning_token_calls",
+    "tool_calls",
+    "known_tool_outcomes",
+    "failed_tool_calls",
+]
+
+
+def aggregate_model_calls(model_calls: pd.DataFrame, keys, **extra_aggregates) -> pd.DataFrame:
+    """Per-group model-call counts and token totals shared by runs and threads."""
+    return model_calls.groupby(keys, as_index=False).agg(
+        model_calls=("served_input_tokens", "size"),
+        **{column: (column, "sum") for column in TOKEN_SUM_COLUMNS},
+        reasoning_output_tokens=("reasoning_output_tokens", nullable_sum),
+        reasoning_token_calls=("reasoning_tokens_available", "sum"),
+        **extra_aggregates,
+    )
+
+
+def aggregate_tool_calls(tool_calls: pd.DataFrame, keys) -> pd.DataFrame:
+    return tool_calls.groupby(keys, as_index=False).agg(
+        tool_calls=("call_success", "size"),
+        known_tool_outcomes=("call_success", "count"),
+        failed_tool_calls=("call_success", count_false),
+    )
+
+
+def fill_missing_totals(frame: pd.DataFrame, count_columns: list[str]) -> None:
+    """Groups without model or tool calls aggregate to NaN; report them as 0."""
+    frame[count_columns] = frame[count_columns].fillna(0).astype(int)
+    frame[TOKEN_SUM_COLUMNS] = frame[TOKEN_SUM_COLUMNS].fillna(0)
+
+
+def add_usage_ratios(frame: pd.DataFrame) -> None:
+    """Derived cache/reasoning/tool-outcome metrics shared by every level."""
+    frame["cache_read_ratio"] = safe_ratio(frame["cached_input_tokens"], frame["served_input_tokens"])
+    frame["cache_creation_ratio"] = safe_ratio(
+        frame["cache_creation_input_tokens"], frame["served_input_tokens"]
+    )
+    frame["reasoning_tokens_available"] = frame["reasoning_token_calls"].gt(0)
+    frame["non_reasoning_output_tokens"] = (
+        frame["output_tokens"] - frame["reasoning_output_tokens"]
+    ).clip(lower=0)
+    frame["reasoning_share_of_output"] = safe_ratio(
+        frame["reasoning_output_tokens"], frame["output_tokens"]
+    )
+    frame["tool_failure_ratio"] = safe_ratio(
+        frame["failed_tool_calls"], frame["known_tool_outcomes"]
+    )
+
+
+def scope_names(frame: pd.DataFrame) -> list[str]:
+    return ["all", *sorted(frame["source"].dropna().unique())]
+
+
+def scope_rows(frame: pd.DataFrame, scope: str) -> pd.DataFrame:
+    return frame if scope == "all" else frame[frame["source"].eq(scope)]
 
 
 def load_events(path: Path) -> pd.DataFrame:
@@ -298,44 +378,14 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
 
     runs = pd.DataFrame(run_rows)
 
-    call_totals = model_calls[model_calls["run_id"].notna()].groupby("run_id").agg(
-        model_calls=("run_id", "size"),
-        served_input_tokens=("served_input_tokens", "sum"),
-        uncached_input_tokens=("uncached_input_tokens", "sum"),
-        cached_input_tokens=("cached_input_tokens", "sum"),
-        cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
-        cache_creation_5m_input_tokens=("cache_creation_5m_input_tokens", "sum"),
-        cache_creation_1h_input_tokens=("cache_creation_1h_input_tokens", "sum"),
-        output_tokens=("output_tokens", "sum"),
-        reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
-        reasoning_token_calls=("reasoning_tokens_available", "sum"),
+    call_totals = aggregate_model_calls(
+        model_calls[model_calls["run_id"].notna()],
+        "run_id",
         model=("model", most_common_non_null),
     )
-    tool_totals = tool_calls[tool_calls["run_id"].notna()].groupby("run_id").agg(
-        tool_calls=("run_id", "size"),
-        known_tool_outcomes=("call_success", "count"),
-        failed_tool_calls=("call_success", lambda values: values.eq(False).sum()),
-    )
+    tool_totals = aggregate_tool_calls(tool_calls[tool_calls["run_id"].notna()], "run_id")
     runs = runs.merge(call_totals, on="run_id", how="left").merge(tool_totals, on="run_id", how="left")
-
-    count_columns = [
-        "model_calls",
-        "reasoning_token_calls",
-        "tool_calls",
-        "known_tool_outcomes",
-        "failed_tool_calls",
-    ]
-    token_columns = [
-        "served_input_tokens",
-        "uncached_input_tokens",
-        "cached_input_tokens",
-        "cache_creation_input_tokens",
-        "cache_creation_5m_input_tokens",
-        "cache_creation_1h_input_tokens",
-        "output_tokens",
-    ]
-    runs[count_columns] = runs[count_columns].fillna(0).astype(int)
-    runs[token_columns] = runs[token_columns].fillna(0)
+    fill_missing_totals(runs, COUNT_COLUMNS)
 
     # Imported/resumed histories can contain an entire prior run whose events
     # were all stamped within a millisecond. Preserve that raw observation for
@@ -349,18 +399,7 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
     )
     runs["duration_quality"] = np.where(collapsed, "collapsed_timestamps", "usable")
     runs.loc[collapsed, "duration_seconds"] = np.nan
-    runs["cache_read_ratio"] = safe_ratio(runs["cached_input_tokens"], runs["served_input_tokens"])
-    runs["cache_creation_ratio"] = safe_ratio(
-        runs["cache_creation_input_tokens"], runs["served_input_tokens"]
-    )
-    runs["reasoning_tokens_available"] = runs["reasoning_token_calls"].gt(0)
-    runs["non_reasoning_output_tokens"] = (
-        runs["output_tokens"] - runs["reasoning_output_tokens"]
-    ).clip(lower=0)
-    runs["reasoning_share_of_output"] = safe_ratio(
-        runs["reasoning_output_tokens"], runs["output_tokens"]
-    )
-    runs["tool_failure_ratio"] = safe_ratio(runs["failed_tool_calls"], runs["known_tool_outcomes"])
+    add_usage_ratios(runs)
     runs["end_to_end_output_tokens_per_second"] = safe_ratio(
         runs["output_tokens"], runs["duration_seconds"]
     )
@@ -418,72 +457,28 @@ def build_threads(
         active_duration_seconds=("duration_seconds", "sum"),
         median_run_duration_seconds=("duration_seconds", "median"),
     )
-    call_totals = model_calls.groupby(["source", "thread_id"], as_index=False).agg(
-        model_calls=("thread_id", "size"),
-        served_input_tokens=("served_input_tokens", "sum"),
-        uncached_input_tokens=("uncached_input_tokens", "sum"),
-        cached_input_tokens=("cached_input_tokens", "sum"),
-        cache_creation_input_tokens=("cache_creation_input_tokens", "sum"),
-        cache_creation_5m_input_tokens=("cache_creation_5m_input_tokens", "sum"),
-        cache_creation_1h_input_tokens=("cache_creation_1h_input_tokens", "sum"),
-        output_tokens=("output_tokens", "sum"),
-        reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
-        reasoning_token_calls=("reasoning_tokens_available", "sum"),
+    call_totals = aggregate_model_calls(
+        model_calls,
+        ["source", "thread_id"],
         speed_status=("speed", combined_speed_status),
     )
-    tool_totals = tool_calls.groupby(["source", "thread_id"], as_index=False).agg(
-        tool_calls=("thread_id", "size"),
-        known_tool_outcomes=("call_success", "count"),
-        failed_tool_calls=("call_success", lambda values: values.eq(False).sum()),
-    )
+    tool_totals = aggregate_tool_calls(tool_calls, ["source", "thread_id"])
 
     threads = base.merge(run_totals, on=["source", "thread_id"], how="left")
     threads = threads.merge(call_totals, on=["source", "thread_id"], how="left")
     threads = threads.merge(tool_totals, on=["source", "thread_id"], how="left")
-    count_columns = [
-        "user_messages",
-        "runs",
-        "model_calls",
-        "reasoning_token_calls",
-        "tool_calls",
-        "known_tool_outcomes",
-        "failed_tool_calls",
-    ]
-    token_columns = [
-        "served_input_tokens",
-        "uncached_input_tokens",
-        "cached_input_tokens",
-        "cache_creation_input_tokens",
-        "cache_creation_5m_input_tokens",
-        "cache_creation_1h_input_tokens",
-        "output_tokens",
-    ]
-    threads[count_columns] = threads[count_columns].fillna(0).astype(int)
-    threads[token_columns] = threads[token_columns].fillna(0)
+    fill_missing_totals(threads, ["user_messages", "runs", *COUNT_COLUMNS])
     threads["speed_status"] = threads["speed_status"].fillna("unknown")
-    threads["cache_read_ratio"] = safe_ratio(threads["cached_input_tokens"], threads["served_input_tokens"])
-    threads["cache_creation_ratio"] = safe_ratio(
-        threads["cache_creation_input_tokens"], threads["served_input_tokens"]
-    )
-    threads["reasoning_tokens_available"] = threads["reasoning_token_calls"].gt(0)
-    threads["non_reasoning_output_tokens"] = (
-        threads["output_tokens"] - threads["reasoning_output_tokens"]
-    ).clip(lower=0)
-    threads["reasoning_share_of_output"] = safe_ratio(
-        threads["reasoning_output_tokens"], threads["output_tokens"]
-    )
-    threads["tool_failure_ratio"] = safe_ratio(
-        threads["failed_tool_calls"], threads["known_tool_outcomes"]
-    )
+    add_usage_ratios(threads)
     return threads.sort_values("thread_start", kind="stable").reset_index(drop=True)
 
 
 def summarize(events: pd.DataFrame, runs: pd.DataFrame, threads: pd.DataFrame) -> pd.DataFrame:
     rows = []
-    for scope in ["all", *sorted(events["source"].dropna().unique())]:
-        scope_events = events if scope == "all" else events[events["source"].eq(scope)]
-        scope_runs = runs if scope == "all" else runs[runs["source"].eq(scope)]
-        scope_threads = threads if scope == "all" else threads[threads["source"].eq(scope)]
+    for scope in scope_names(events):
+        scope_events = scope_rows(events, scope)
+        scope_runs = scope_rows(runs, scope)
+        scope_threads = scope_rows(threads, scope)
         served = scope_runs["served_input_tokens"].sum()
         known_outcomes = scope_runs["known_tool_outcomes"].sum()
         reasoning_runs = scope_runs[scope_runs["reasoning_tokens_available"]]
@@ -584,8 +579,8 @@ def distribution_summary(
     }
     rows = []
     for level, (frame, metrics) in datasets.items():
-        for scope in ["all", *sorted(frame["source"].unique())]:
-            scoped = frame if scope == "all" else frame[frame["source"].eq(scope)]
+        for scope in scope_names(frame):
+            scoped = scope_rows(frame, scope)
             for metric in metrics:
                 values = scoped[metric].replace([np.inf, -np.inf], np.nan).dropna()
                 rows.append(
@@ -598,9 +593,9 @@ def distribution_summary(
                         "std": values.std(),
                         "min": values.min(),
                         "p50": values.median(),
-                        "p90": values.quantile(0.90),
-                        "p95": values.quantile(0.95),
-                        "p99": values.quantile(0.99),
+                        "p90": percentile(values, 0.90),
+                        "p95": percentile(values, 0.95),
+                        "p99": percentile(values, 0.99),
                         "max": values.max(),
                     }
                 )
@@ -642,14 +637,14 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
             "sum",
         ),
         output_tokens=("output_tokens", "sum"),
-        reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.sum(min_count=1)),
+        reasoning_output_tokens=("reasoning_output_tokens", nullable_sum),
         reasoning_token_calls=("reasoning_tokens_available", "sum"),
         avg_served_input_tokens=("served_input_tokens", "mean"),
         p50_served_input_tokens=("served_input_tokens", "median"),
-        p95_served_input_tokens=("served_input_tokens", lambda values: values.quantile(0.95)),
+        p95_served_input_tokens=("served_input_tokens", lambda values: percentile(values, 0.95)),
         avg_output_tokens=("output_tokens", "mean"),
         avg_reasoning_output_tokens=("reasoning_output_tokens", "mean"),
-        p95_reasoning_output_tokens=("reasoning_output_tokens", lambda values: values.quantile(0.95)),
+        p95_reasoning_output_tokens=("reasoning_output_tokens", lambda values: percentile(values, 0.95)),
     )
     model_usage["cache_read_ratio"] = safe_ratio(
         model_usage["cached_input_tokens"], model_usage["served_input_tokens"]
@@ -668,7 +663,7 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
     tool_usage = tool_calls.groupby(["source", "tool_name"], as_index=False).agg(
         calls=("tool_name", "size"),
         known_outcomes=("call_success", "count"),
-        failures=("call_success", lambda values: values.eq(False).sum()),
+        failures=("call_success", count_false),
     )
     tool_usage["failure_ratio"] = safe_ratio(tool_usage["failures"], tool_usage["known_outcomes"])
     tool_usage.sort_values("calls", ascending=False).to_csv(
@@ -710,13 +705,13 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path(__file__).parent / "sanitized" / "threads.csv",
+        default=Path("sanitized") / "threads.csv",
         help="Input event CSV",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path(__file__).parent / "output",
+        default=Path("output"),
         help="Directory for CSV tables and PNG plots",
     )
     args = parser.parse_args()

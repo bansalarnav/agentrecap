@@ -5,8 +5,10 @@ from pathlib import Path
 from .common import (
     anonymous_id,
     anonymous_id_or_none,
+    base_event,
     event_sort_key,
     init_usage_fields,
+    mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
     speed_status,
@@ -162,56 +164,45 @@ def convert_thread(path: Path) -> list[dict]:
             tool_output = payload.get("output")
 
         events.append(
-            {
-                "source": SOURCE,
-                "provider": PROVIDER,
-                "thread_id": thread_id,
-                "stream_id": "main",
-                "file_id": file_id,
-                "file_event_index": len(events),
-                "event_index": None,
-                "timestamp": record.get("timestamp"),
-                "event_id": event_id,
-                "parent_event_id": None,
-                "agent_id": thread_id if is_sidechain else None,
-                "is_sidechain": is_sidechain,
-                "parent_thread_id": event_parent_id or parent_thread_id,
-                "child_thread_id": child_thread_id,
-                "spawned_by_event_id": None,
-                "event_kind": event_kind,
-                "raw_event_type": f"{record_type}.{payload_type}" if payload_type else record_type,
-                "is_run_start": record_type == "event_msg" and payload_type == "user_message",
-                "run_end_status": RUN_END_STATUSES.get(payload_type) if event_kind == "run_end" else None,
-                "duration_ms": payload.get("duration_ms"),
-                "time_to_first_token_ms": payload.get("time_to_first_token_ms"),
-                "model": payload.get("model") or model,
-                "reasoning_effort": payload.get("reasoning_effort") or reasoning_effort,
-                "speed": speed_status(None, service_tier),
-                "service_tier": service_tier,
-                "inference_geo": None,
-                "message_id": None,
-                "request_id": None,
-                "tool_call_id": anonymous_id_or_none("codex-tool", call_id),
-                "tool_name": tool_name,
-                "tool_success": tool_success,
-                "usage_kind": "model_call" if usage or total_usage else None,
-                "input_tokens": usage.get("input_tokens"),
-                "output_tokens": usage.get("output_tokens"),
-                "cached_input_tokens": usage.get("cached_input_tokens"),
-                "cache_creation_input_tokens": None,
-                "cache_creation_5m_input_tokens": None,
-                "cache_creation_1h_input_tokens": None,
-                "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
-                "total_tokens": usage.get("total_tokens"),
-                "cumulative_input_tokens": total_usage.get("input_tokens"),
-                "cumulative_output_tokens": total_usage.get("output_tokens"),
-                "cumulative_cached_input_tokens": total_usage.get("cached_input_tokens"),
-                "cumulative_reasoning_output_tokens": total_usage.get("reasoning_output_tokens"),
-                "reported_cost_usd": None,
-                "text_length": serialized_length(content),
-                "tool_input_length": serialized_length(tool_input),
-                "tool_output_length": serialized_length(tool_output),
-            }
+            base_event(
+                SOURCE,
+                PROVIDER,
+                thread_id,
+                file_id,
+                len(events),
+                timestamp=record.get("timestamp"),
+                event_id=event_id,
+                agent_id=thread_id if is_sidechain else None,
+                is_sidechain=is_sidechain,
+                parent_thread_id=event_parent_id or parent_thread_id,
+                child_thread_id=child_thread_id,
+                event_kind=event_kind,
+                raw_event_type=f"{record_type}.{payload_type}" if payload_type else record_type,
+                is_run_start=record_type == "event_msg" and payload_type == "user_message",
+                run_end_status=RUN_END_STATUSES.get(payload_type) if event_kind == "run_end" else None,
+                duration_ms=payload.get("duration_ms"),
+                time_to_first_token_ms=payload.get("time_to_first_token_ms"),
+                model=payload.get("model") or model,
+                reasoning_effort=payload.get("reasoning_effort") or reasoning_effort,
+                speed=speed_status(None, service_tier),
+                service_tier=service_tier,
+                tool_call_id=anonymous_id_or_none("codex-tool", call_id),
+                tool_name=tool_name,
+                tool_success=tool_success,
+                usage_kind="model_call" if usage or total_usage else None,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                cached_input_tokens=usage.get("cached_input_tokens"),
+                reasoning_output_tokens=usage.get("reasoning_output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+                cumulative_input_tokens=total_usage.get("input_tokens"),
+                cumulative_output_tokens=total_usage.get("output_tokens"),
+                cumulative_cached_input_tokens=total_usage.get("cached_input_tokens"),
+                cumulative_reasoning_output_tokens=total_usage.get("reasoning_output_tokens"),
+                text_length=serialized_length(content),
+                tool_input_length=serialized_length(tool_input),
+                tool_output_length=serialized_length(tool_output),
+            )
         )
 
     return events
@@ -261,23 +252,17 @@ def finalize_events(events: list[dict]) -> list[dict]:
                         delta = filled
                 deltas[key] = delta
             previous = event
-            served = deltas["cumulative_input_tokens"]
-            output = deltas["cumulative_output_tokens"]
-            cached = deltas["cumulative_cached_input_tokens"]
-            if not any(value > 0 for value in (served, output, cached)):
-                # Repeated event_msg.token_count snapshots have zero cumulative
-                # delta and are not additional model calls.
-                event["usage_dedup_reason"] = "zero_delta_snapshot"
-                continue
-            event["usage_canonical"] = True
-            event["usage_source"] = "cumulative_ledger_delta"
-            event["call_served_input_tokens"] = served
-            event["call_cached_input_tokens"] = cached
-            event["call_cache_creation_input_tokens"] = 0
-            event["call_cache_creation_5m_input_tokens"] = 0
-            event["call_cache_creation_1h_input_tokens"] = 0
-            event["call_output_tokens"] = output
-            event["call_reasoning_output_tokens"] = deltas["cumulative_reasoning_output_tokens"]
+            # Repeated event_msg.token_count snapshots have zero cumulative
+            # delta and are not additional model calls.
+            mark_canonical_usage(
+                event,
+                "cumulative_ledger_delta",
+                served_input_tokens=deltas["cumulative_input_tokens"],
+                cached_input_tokens=deltas["cumulative_cached_input_tokens"],
+                output_tokens=deltas["cumulative_output_tokens"],
+                reasoning_output_tokens=deltas["cumulative_reasoning_output_tokens"],
+                zero_usage_reason="zero_delta_snapshot",
+            )
 
     snapshot_events = sorted(
         (
@@ -306,21 +291,14 @@ def finalize_events(events: list[dict]) -> list[dict]:
             last_by_snapshot[snapshot]["usage_dedup_reason"] = "duplicate_snapshot"
         last_by_snapshot[snapshot] = event
     for event in last_by_snapshot.values():
-        served = event.get("input_tokens") or 0
-        cached = event.get("cached_input_tokens") or 0
-        output = event.get("output_tokens") or 0
-        if not any(value > 0 for value in (served, output, cached)):
-            event["usage_dedup_reason"] = "zero_usage"
-            continue
-        event["usage_canonical"] = True
-        event["usage_source"] = "deduplicated_last_snapshot"
-        event["call_served_input_tokens"] = served
-        event["call_cached_input_tokens"] = cached
-        event["call_cache_creation_input_tokens"] = 0
-        event["call_cache_creation_5m_input_tokens"] = 0
-        event["call_cache_creation_1h_input_tokens"] = 0
-        event["call_output_tokens"] = output
-        event["call_reasoning_output_tokens"] = event.get("reasoning_output_tokens")
+        mark_canonical_usage(
+            event,
+            "deduplicated_last_snapshot",
+            served_input_tokens=event.get("input_tokens") or 0,
+            cached_input_tokens=event.get("cached_input_tokens") or 0,
+            output_tokens=event.get("output_tokens") or 0,
+            reasoning_output_tokens=event.get("reasoning_output_tokens"),
+        )
 
     for event in events:
         if (

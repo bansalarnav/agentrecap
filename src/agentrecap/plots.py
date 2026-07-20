@@ -22,6 +22,24 @@ PALETTE = [
     "tab:cyan",
 ]
 
+# Every chart make_plots can produce: filename -> (report heading, description).
+# The report renders whichever of these exist after a run, in this order.
+CHARTS = {
+    "run_duration_hist.png": ("Run duration", "Distribution of end-to-end run duration."),
+    "run_duration_ecdf.png": ("Run duration percentiles", "Cumulative view of run duration."),
+    "response_gap_hist.png": ("Response gaps", "Idle time between an answer and the next prompt."),
+    "response_gap_ecdf.png": ("Response gap percentiles", "Cumulative view of user think time."),
+    "tool_calls_per_run_hist.png": ("Tool calls per run", "How tool-heavy individual runs are."),
+    "tool_calls_per_run_ecdf.png": ("Tool-call percentiles", "Cumulative view of tool calls per run."),
+    "user_messages_per_thread_hist.png": ("Messages per thread", "Conversation length by user messages."),
+    "user_messages_per_thread_ecdf.png": ("Thread-length percentiles", "Cumulative conversation length."),
+    "cache_ratios.png": ("Cache usage", "Cache-read ratios at run and thread level."),
+    "run_load_vs_duration.png": ("Load and duration", "Input size and tool calls compared with duration."),
+    "tokens_per_run.png": ("Tokens per run", "Input and output token distributions."),
+    "reasoning_vs_output_tokens.png": ("Reasoning tokens", "Reasoning volume and share of model output."),
+    "top_tools.png": ("Most-used tools", "The most frequent tools for each source."),
+}
+
 
 def assign_source_colors(sources) -> dict:
     """Stable color per source, assigned alphabetically so every chart in a
@@ -164,6 +182,167 @@ def plot_log_hist(
     plt.close(fig)
 
 
+def plot_cache_ratios(runs: pd.DataFrame, threads: pd.DataFrame, path: Path, colors: dict):
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for ax, (frame, level) in zip(axes, ((runs, "Run"), (threads, "Thread")), strict=True):
+        _draw_hist(ax, frame, "cache_read_ratio", np.linspace(0, 1, 31), colors)
+        ax.set(
+            title=f"{level} cache-read ratio",
+            xlabel="Cached / served input",
+            ylabel="Fraction of that source",
+        )
+        ax.legend()
+        ax.grid(alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_load_vs_duration(runs: pd.DataFrame, path: Path, colors: dict):
+    """Scatter served input tokens and tool calls against run duration."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    rng = np.random.default_rng(7)
+    if len(runs):
+        sample_index = rng.choice(len(runs), size=min(len(runs), 5000), replace=False)
+        sample = runs.iloc[sample_index]
+    else:
+        sample = runs
+    panels = (
+        ("served_input_tokens", "Served input tokens", "Input load vs. end-to-end duration"),
+        ("tool_calls", "Tool calls", "Tool calls vs. end-to-end duration"),
+    )
+    for ax, (column, xlabel, title) in zip(axes, panels, strict=True):
+        for source, group in sample.groupby("source"):
+            valid = group[group[column].gt(0) & group["duration_seconds"].gt(0)]
+            ax.scatter(
+                valid[column],
+                valid["duration_seconds"],
+                s=12,
+                alpha=0.35,
+                label=source,
+                color=colors.get(source),
+            )
+        has_data = (sample[column].gt(0) & sample["duration_seconds"].gt(0)).any()
+        ax.set(
+            title=title,
+            xlabel=f"{xlabel} (log)" if has_data else xlabel,
+            ylabel="Duration seconds (log)" if has_data else "Duration seconds",
+        )
+        if has_data:
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+        ax.grid(alpha=0.2)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_tokens_per_run(runs: pd.DataFrame, path: Path, colors: dict):
+    """Box plots of input and output tokens per run, grouped by source."""
+    token_plot = runs.melt(
+        id_vars="source",
+        value_vars=["served_input_tokens", "output_tokens"],
+        var_name="token_type",
+        value_name="tokens",
+    )
+    token_plot = token_plot[token_plot["tokens"].gt(0)].copy()
+    labels = []
+    values = []
+    for (source, token_type), group in token_plot.groupby(["source", "token_type"], sort=True):
+        labels.append(f"{source}\n{token_type.replace('_tokens', '').replace('_', ' ')}")
+        values.append(group["tokens"].to_numpy())
+    if not values:
+        return
+    fig, ax = plt.subplots(figsize=(9, 5))
+    boxes = ax.boxplot(values, tick_labels=labels, showfliers=False, patch_artist=True)
+    for box, label in zip(boxes["boxes"], labels, strict=True):
+        box.set_facecolor(colors.get(label.split("\n", 1)[0], "white"))
+        box.set_alpha(0.55)
+    ax.set_yscale("log")
+    ax.set(title="Tokens per run", ylabel="Tokens (log scale)")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_reasoning_tokens(runs: pd.DataFrame, model_calls: pd.DataFrame, path: Path):
+    """Reasoning volume against total output, and reasoning share distributions."""
+    reasoning_calls = model_calls[
+        model_calls["reasoning_tokens_available"] & model_calls["output_tokens"].gt(0)
+    ].copy()
+    if reasoning_calls.empty:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    positive = reasoning_calls[reasoning_calls["reasoning_output_tokens"].gt(0)]
+    if not positive.empty:
+        density = axes[0].hexbin(
+            positive["output_tokens"],
+            positive["reasoning_output_tokens"],
+            xscale="log",
+            yscale="log",
+            gridsize=40,
+            bins="log",
+            mincnt=1,
+            cmap="viridis",
+        )
+        lower = min(positive["output_tokens"].min(), positive["reasoning_output_tokens"].min())
+        upper = max(positive["output_tokens"].max(), positive["reasoning_output_tokens"].max())
+        axes[0].plot([lower, upper], [lower, upper], color="black", linestyle="--", linewidth=1)
+        fig.colorbar(density, ax=axes[0], label="Model-call count (log color scale)")
+    axes[0].set(
+        title="Reasoning tokens vs. total output per model call",
+        xlabel="Total output tokens (log)",
+        ylabel="Reasoning output tokens (log)",
+    )
+    axes[0].grid(alpha=0.2)
+
+    axes[1].hist(
+        reasoning_calls["reasoning_share_of_output"].dropna(),
+        bins=np.linspace(0, 1, 31),
+        alpha=0.6,
+        density=True,
+        label="model calls",
+    )
+    reasoning_runs = runs[
+        runs["reasoning_tokens_available"] & runs["reasoning_share_of_output"].notna()
+    ]
+    axes[1].hist(
+        reasoning_runs["reasoning_share_of_output"],
+        bins=np.linspace(0, 1, 31),
+        alpha=0.6,
+        density=True,
+        label="runs",
+    )
+    axes[1].set(
+        title="Reasoning share of total output",
+        xlabel="Reasoning tokens / total output tokens",
+        ylabel="Density",
+    )
+    axes[1].grid(alpha=0.2)
+    axes[1].legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def plot_top_tools(tool_calls: pd.DataFrame, path: Path, colors: dict):
+    source_names = sorted(tool_calls["source"].dropna().unique())
+    if not source_names:
+        return
+    fig, axes = plt.subplots(1, len(source_names), figsize=(7 * len(source_names), 6), squeeze=False)
+    for ax, source in zip(axes[0], source_names):
+        top_tools = tool_calls[tool_calls["source"].eq(source)]["tool_name"].value_counts().head(12)
+        top_tools.sort_values().plot.barh(ax=ax, color=colors.get(source))
+        ax.set(title=f"Most-used tools: {source}", xlabel="Calls", ylabel="Tool")
+        ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def make_plots(
     runs: pd.DataFrame,
     threads: pd.DataFrame,
@@ -245,173 +424,8 @@ def make_plots(
         colors,
     )
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    _draw_hist(axes[0], runs, "cache_read_ratio", np.linspace(0, 1, 31), colors)
-    axes[0].set(
-        title="Run cache-read ratio",
-        xlabel="Cached / served input",
-        ylabel="Fraction of that source",
-    )
-    axes[0].legend()
-    axes[0].grid(alpha=0.2)
-
-    _draw_hist(axes[1], threads, "cache_read_ratio", np.linspace(0, 1, 31), colors)
-    axes[1].set(
-        title="Thread cache-read ratio",
-        xlabel="Cached / served input",
-        ylabel="Fraction of that source",
-    )
-    axes[1].legend()
-    axes[1].grid(alpha=0.2)
-    fig.tight_layout()
-    fig.savefig(output_dir / "cache_ratios.png", dpi=160)
-    plt.close(fig)
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    rng = np.random.default_rng(7)
-    sample_index = rng.choice(len(runs), size=min(len(runs), 5000), replace=False) if len(runs) else []
-    sample = runs.iloc[sample_index] if len(runs) else runs
-    for source, group in sample.groupby("source"):
-        valid = group[group["served_input_tokens"].gt(0) & group["duration_seconds"].gt(0)]
-        axes[0].scatter(
-            valid["served_input_tokens"],
-            valid["duration_seconds"],
-            s=12,
-            alpha=0.35,
-            label=source,
-            color=colors.get(source),
-        )
-        valid = group[group["tool_calls"].gt(0) & group["duration_seconds"].gt(0)]
-        axes[1].scatter(
-            valid["tool_calls"],
-            valid["duration_seconds"],
-            s=12,
-            alpha=0.35,
-            label=source,
-            color=colors.get(source),
-        )
-    axes[0].set(
-        title="Input load vs. end-to-end duration",
-        xlabel="Served input tokens",
-        ylabel="Duration seconds",
-    )
-    axes[1].set(
-        title="Tool calls vs. end-to-end duration",
-        xlabel="Tool calls",
-        ylabel="Duration seconds",
-    )
-    if (sample["served_input_tokens"].gt(0) & sample["duration_seconds"].gt(0)).any():
-        axes[0].set_xlabel("Served input tokens (log)")
-        axes[0].set_ylabel("Duration seconds (log)")
-        axes[0].set_xscale("log")
-        axes[0].set_yscale("log")
-    if (sample["tool_calls"].gt(0) & sample["duration_seconds"].gt(0)).any():
-        axes[1].set_xlabel("Tool calls (log)")
-        axes[1].set_ylabel("Duration seconds (log)")
-        axes[1].set_xscale("log")
-        axes[1].set_yscale("log")
-    for ax in axes:
-        ax.grid(alpha=0.2)
-        if ax.get_legend_handles_labels()[0]:
-            ax.legend()
-    fig.tight_layout()
-    fig.savefig(output_dir / "run_load_vs_duration.png", dpi=160)
-    plt.close(fig)
-
-    token_plot = runs.melt(
-        id_vars="source",
-        value_vars=["served_input_tokens", "output_tokens"],
-        var_name="token_type",
-        value_name="tokens",
-    )
-    token_plot = token_plot[token_plot["tokens"].gt(0)].copy()
-    labels = []
-    values = []
-    for (source, token_type), group in token_plot.groupby(["source", "token_type"], sort=True):
-        labels.append(f"{source}\n{token_type.replace('_tokens', '').replace('_', ' ')}")
-        values.append(group["tokens"].to_numpy())
-    if values:
-        fig, ax = plt.subplots(figsize=(9, 5))
-        boxes = ax.boxplot(values, tick_labels=labels, showfliers=False, patch_artist=True)
-        for box, label in zip(boxes["boxes"], labels, strict=True):
-            box.set_facecolor(colors.get(label.split("\n", 1)[0], "white"))
-            box.set_alpha(0.55)
-        ax.set_yscale("log")
-        ax.set(title="Tokens per run", ylabel="Tokens (log scale)")
-        ax.grid(axis="y", alpha=0.25)
-        fig.tight_layout()
-        fig.savefig(output_dir / "tokens_per_run.png", dpi=160)
-        plt.close(fig)
-
-    reasoning_calls = model_calls[
-        model_calls["reasoning_tokens_available"] & model_calls["output_tokens"].gt(0)
-    ].copy()
-    if not reasoning_calls.empty:
-        fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-        positive = reasoning_calls[reasoning_calls["reasoning_output_tokens"].gt(0)]
-        if not positive.empty:
-            density = axes[0].hexbin(
-                positive["output_tokens"],
-                positive["reasoning_output_tokens"],
-                xscale="log",
-                yscale="log",
-                gridsize=40,
-                bins="log",
-                mincnt=1,
-                cmap="viridis",
-            )
-            lower = min(positive["output_tokens"].min(), positive["reasoning_output_tokens"].min())
-            upper = max(positive["output_tokens"].max(), positive["reasoning_output_tokens"].max())
-            axes[0].plot([lower, upper], [lower, upper], color="black", linestyle="--", linewidth=1)
-            fig.colorbar(density, ax=axes[0], label="Model-call count (log color scale)")
-        axes[0].set(
-            title="Reasoning tokens vs. total output per model call",
-            xlabel="Total output tokens (log)",
-            ylabel="Reasoning output tokens (log)",
-        )
-        axes[0].grid(alpha=0.2)
-
-        axes[1].hist(
-            reasoning_calls["reasoning_share_of_output"].dropna(),
-            bins=np.linspace(0, 1, 31),
-            alpha=0.6,
-            density=True,
-            label="model calls",
-        )
-        reasoning_runs = runs[
-            runs["reasoning_tokens_available"] & runs["reasoning_share_of_output"].notna()
-        ]
-        axes[1].hist(
-            reasoning_runs["reasoning_share_of_output"],
-            bins=np.linspace(0, 1, 31),
-            alpha=0.6,
-            density=True,
-            label="runs",
-        )
-        axes[1].set(
-            title="Reasoning share of total output",
-            xlabel="Reasoning tokens / total output tokens",
-            ylabel="Density",
-        )
-        axes[1].grid(alpha=0.2)
-        axes[1].legend()
-        fig.tight_layout()
-        fig.savefig(output_dir / "reasoning_vs_output_tokens.png", dpi=160)
-        plt.close(fig)
-
-    source_names = sorted(tool_calls["source"].dropna().unique())
-    if source_names:
-        fig, axes = plt.subplots(1, len(source_names), figsize=(7 * len(source_names), 6), squeeze=False)
-        for ax, source in zip(axes[0], source_names):
-            top_tools = tool_calls[tool_calls["source"].eq(source)]["tool_name"].value_counts().head(12)
-            top_tools.sort_values().plot.barh(ax=ax, color=colors.get(source))
-            ax.set(title=f"Most-used tools: {source}", xlabel="Calls", ylabel="Tool")
-            ax.grid(axis="x", alpha=0.25)
-        fig.tight_layout()
-        fig.savefig(output_dir / "top_tools.png", dpi=160)
-        plt.close(fig)
-
-    # These were produced by earlier versions but are not useful for a
-    # single-user trace. Remove stale copies when reusing an output directory.
-    (output_dir / "daily_load.csv").unlink(missing_ok=True)
-    (output_dir / "daily_load.png").unlink(missing_ok=True)
+    plot_cache_ratios(runs, threads, output_dir / "cache_ratios.png", colors)
+    plot_load_vs_duration(runs, output_dir / "run_load_vs_duration.png", colors)
+    plot_tokens_per_run(runs, output_dir / "tokens_per_run.png", colors)
+    plot_reasoning_tokens(runs, model_calls, output_dir / "reasoning_vs_output_tokens.png")
+    plot_top_tools(tool_calls, output_dir / "top_tools.png", colors)

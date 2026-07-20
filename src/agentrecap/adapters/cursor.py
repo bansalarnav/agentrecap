@@ -34,11 +34,12 @@ from urllib.parse import quote
 from .common import (
     anonymous_id,
     anonymous_id_or_none,
+    base_event,
     event_sort_key,
     init_usage_fields,
+    mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
-    speed_status,
 )
 
 SOURCE = "cursor"
@@ -190,57 +191,8 @@ def _tool_success(status: object) -> bool | None:
 
 
 def _base_event(thread_id: str, file_id: str, file_event_index: int) -> dict:
-    """One standardized event with the full shared column set."""
-    return {
-        "source": SOURCE,
-        "provider": PROVIDER,
-        "thread_id": thread_id,
-        "stream_id": "main",
-        "file_id": file_id,
-        "file_event_index": file_event_index,
-        "event_index": None,
-        "timestamp": None,
-        "event_id": None,
-        "parent_event_id": None,
-        "agent_id": None,
-        "is_sidechain": False,
-        "parent_thread_id": None,
-        "child_thread_id": None,
-        "spawned_by_event_id": None,
-        "event_kind": "other",
-        "raw_event_type": None,
-        "is_run_start": False,
-        "run_end_status": None,
-        "duration_ms": None,
-        "time_to_first_token_ms": None,
-        "model": None,
-        "reasoning_effort": None,
-        "speed": speed_status(None, None),
-        "service_tier": None,
-        "inference_geo": None,
-        "message_id": None,
-        "request_id": None,
-        "tool_call_id": None,
-        "tool_name": None,
-        "tool_success": None,
-        "usage_kind": None,
-        "input_tokens": None,
-        "output_tokens": None,
-        "cached_input_tokens": None,
-        "cache_creation_input_tokens": None,
-        "cache_creation_5m_input_tokens": None,
-        "cache_creation_1h_input_tokens": None,
-        "reasoning_output_tokens": None,
-        "total_tokens": None,
-        "cumulative_input_tokens": None,
-        "cumulative_output_tokens": None,
-        "cumulative_cached_input_tokens": None,
-        "cumulative_reasoning_output_tokens": None,
-        "reported_cost_usd": None,
-        "text_length": None,
-        "tool_input_length": None,
-        "tool_output_length": None,
-    }
+    """One standardized Cursor event with the full shared column set."""
+    return base_event(SOURCE, PROVIDER, thread_id, file_id, file_event_index)
 
 
 def _composer_bubble_events(
@@ -628,21 +580,13 @@ def convert_thread(path: Path) -> list[dict]:
 
 
 def _mark_canonical(event: dict) -> None:
-    served = event.get("input_tokens") or 0
-    output = event.get("output_tokens") or 0
-    if not (served > 0 or output > 0):
-        event["usage_dedup_reason"] = "zero_usage"
-        return
-    event["usage_canonical"] = True
-    event["usage_source"] = "bubble_token_count"
-    event["call_served_input_tokens"] = served
     # Cursor reports a single per-bubble input total with no cache breakdown.
-    event["call_cached_input_tokens"] = 0
-    event["call_cache_creation_input_tokens"] = 0
-    event["call_cache_creation_5m_input_tokens"] = 0
-    event["call_cache_creation_1h_input_tokens"] = 0
-    event["call_output_tokens"] = output
-    event["call_reasoning_output_tokens"] = None
+    mark_canonical_usage(
+        event,
+        "bubble_token_count",
+        served_input_tokens=event.get("input_tokens") or 0,
+        output_tokens=event.get("output_tokens") or 0,
+    )
 
 
 def finalize_events(events: list[dict]) -> list[dict]:

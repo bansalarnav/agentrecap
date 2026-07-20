@@ -5,8 +5,10 @@ from pathlib import Path
 from .common import (
     anonymous_id,
     anonymous_id_or_none,
+    base_event,
     event_sort_key,
     init_usage_fields,
+    mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
     speed_status,
@@ -64,6 +66,10 @@ def convert_thread(path: Path) -> list[dict]:
         if (nested.get("message") or {}).get("usage"):
             usage_record = nested
 
+        def field(key: str):
+            """Prefer the nested usage record's value, falling back to the raw record."""
+            return usage_record.get(key) or record.get(key)
+
         record_type = usage_record.get("type", record.get("type", "unknown"))
         message = usage_record.get("message") or {}
         role = message.get("role") if record_type in {"user", "assistant"} else None
@@ -73,25 +79,18 @@ def convert_thread(path: Path) -> list[dict]:
         usage = message.get("usage") or {}
         blocks = message.get("content")
         raw_message_id = message.get("id")
-        event_id = anonymous_id_or_none(
-            "claude-event", usage_record.get("uuid") or record.get("uuid") or raw_message_id
-        )
+        event_id = anonymous_id_or_none("claude-event", field("uuid") or raw_message_id)
         parent_event_id = anonymous_id_or_none(
             "claude-event",
             record.get("parentUuid") or record.get("logicalParentUuid"),
         )
         agent_id = anonymous_id_or_none(
-            "claude-agent",
-            usage_record.get("agentId")
-            or record.get("agentId")
-            or record.get("attributionAgent"),
+            "claude-agent", field("agentId") or record.get("attributionAgent")
         )
         spawned_by_event_id = anonymous_id_or_none("claude-event", record.get("sourceToolAssistantUUID"))
-        request_id = anonymous_id_or_none(
-            "claude-request", usage_record.get("requestId") or record.get("requestId")
-        )
+        request_id = anonymous_id_or_none("claude-request", field("requestId"))
         is_sidechain = usage_record.get("isSidechain", record.get("isSidechain"))
-        timestamp = usage_record.get("timestamp") or record.get("timestamp")
+        timestamp = field("timestamp")
         if not isinstance(blocks, list) or not blocks:
             blocks = [None]
 
@@ -150,62 +149,50 @@ def convert_thread(path: Path) -> list[dict]:
                 )
 
             events.append(
-                {
-                    "source": SOURCE,
-                    "provider": PROVIDER,
-                    "thread_id": thread_id,
-                    "stream_id": f"agent:{agent_id}" if agent_id else "main",
-                    "file_id": file_id,
-                    "file_event_index": len(events),
-                    "event_index": None,
-                    "timestamp": timestamp,
-                    "event_id": event_id,
-                    "parent_event_id": parent_event_id,
-                    "agent_id": agent_id,
-                    "is_sidechain": is_sidechain,
-                    "parent_thread_id": None,
-                    "child_thread_id": None,
-                    "spawned_by_event_id": spawned_by_event_id,
-                    "event_kind": event_kind,
-                    "raw_event_type": raw_event_type,
-                    "is_run_start": is_run_start,
-                    "run_end_status": None,
-                    "duration_ms": None,
-                    "time_to_first_token_ms": None,
-                    "model": record_model or current_model,
-                    "reasoning_effort": None,
-                    "speed": speed_status(usage.get("speed"), usage.get("service_tier")),
-                    "service_tier": usage.get("service_tier"),
-                    "inference_geo": usage.get("inference_geo"),
-                    "message_id": anonymous_id_or_none("claude-message", raw_message_id),
-                    "request_id": request_id,
-                    "tool_call_id": anonymous_id_or_none(
+                base_event(
+                    SOURCE,
+                    PROVIDER,
+                    thread_id,
+                    file_id,
+                    len(events),
+                    stream_id=f"agent:{agent_id}" if agent_id else "main",
+                    timestamp=timestamp,
+                    event_id=event_id,
+                    parent_event_id=parent_event_id,
+                    agent_id=agent_id,
+                    is_sidechain=is_sidechain,
+                    spawned_by_event_id=spawned_by_event_id,
+                    event_kind=event_kind,
+                    raw_event_type=raw_event_type,
+                    is_run_start=is_run_start,
+                    model=record_model or current_model,
+                    speed=speed_status(usage.get("speed"), usage.get("service_tier")),
+                    service_tier=usage.get("service_tier"),
+                    inference_geo=usage.get("inference_geo"),
+                    message_id=anonymous_id_or_none("claude-message", raw_message_id),
+                    request_id=request_id,
+                    tool_call_id=anonymous_id_or_none(
                         "claude-tool", block.get("id") or block.get("tool_use_id")
                     ),
-                    "tool_name": tool_name,
-                    "tool_success": tool_success,
-                    "usage_kind": "model_call" if include_usage else None,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "cached_input_tokens": cached_tokens,
-                    "cache_creation_input_tokens": cache_creation_tokens,
-                    "cache_creation_5m_input_tokens": cache_creation_5m_tokens,
-                    "cache_creation_1h_input_tokens": cache_creation_1h_tokens,
-                    "reasoning_output_tokens": None,
-                    "total_tokens": total_tokens,
-                    "cumulative_input_tokens": None,
-                    "cumulative_output_tokens": None,
-                    "cumulative_cached_input_tokens": None,
-                    "cumulative_reasoning_output_tokens": None,
-                    "reported_cost_usd": (
+                    tool_name=tool_name,
+                    tool_success=tool_success,
+                    usage_kind="model_call" if include_usage else None,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cached_input_tokens=cached_tokens,
+                    cache_creation_input_tokens=cache_creation_tokens,
+                    cache_creation_5m_input_tokens=cache_creation_5m_tokens,
+                    cache_creation_1h_input_tokens=cache_creation_1h_tokens,
+                    total_tokens=total_tokens,
+                    reported_cost_usd=(
                         usage_record.get("costUSD", record.get("costUSD"))
                         if include_usage
                         else None
                     ),
-                    "text_length": serialized_length(text),
-                    "tool_input_length": serialized_length(tool_input),
-                    "tool_output_length": serialized_length(tool_output),
-                }
+                    text_length=serialized_length(text),
+                    tool_input_length=serialized_length(tool_input),
+                    tool_output_length=serialized_length(tool_output),
+                )
             )
 
         for iteration_index, iteration in enumerate(usage.get("iterations") or []):
@@ -228,42 +215,39 @@ def convert_thread(path: Path) -> list[dict]:
                 or f"event-{len(events)}"
             )
             events.append(
-                {
-                    **{key: None for key in events[-1]},
-                    "source": SOURCE,
-                    "provider": PROVIDER,
-                    "thread_id": thread_id,
-                    "stream_id": f"agent:{agent_id}" if agent_id else "main",
-                    "file_id": file_id,
-                    "file_event_index": len(events),
-                    "timestamp": timestamp,
-                    "event_id": anonymous_id_or_none(
+                base_event(
+                    SOURCE,
+                    PROVIDER,
+                    thread_id,
+                    file_id,
+                    len(events),
+                    stream_id=f"agent:{agent_id}" if agent_id else "main",
+                    timestamp=timestamp,
+                    event_id=anonymous_id_or_none(
                         "claude-event", f"{advisor_identity}:advisor:{iteration_index}"
                     ),
-                    "parent_event_id": event_id,
-                    "agent_id": agent_id,
-                    "is_sidechain": is_sidechain,
-                    "event_kind": "other",
-                    "raw_event_type": "assistant.advisor_usage",
-                    "is_run_start": False,
-                    "model": advisor_model,
-                    "speed": speed_status(
+                    parent_event_id=event_id,
+                    agent_id=agent_id,
+                    is_sidechain=is_sidechain,
+                    raw_event_type="assistant.advisor_usage",
+                    model=advisor_model,
+                    speed=speed_status(
                         iteration.get("speed"), iteration.get("service_tier")
                     ),
-                    "service_tier": iteration.get("service_tier"),
-                    "inference_geo": iteration.get("inference_geo"),
-                    "message_id": anonymous_id_or_none(
+                    service_tier=iteration.get("service_tier"),
+                    inference_geo=iteration.get("inference_geo"),
+                    message_id=anonymous_id_or_none(
                         "claude-message", f"{advisor_identity}:advisor:{iteration_index}"
                     ),
-                    "request_id": request_id,
-                    "usage_kind": "advisor_call",
-                    "input_tokens": advisor_input,
-                    "output_tokens": advisor_output,
-                    "cached_input_tokens": advisor_cached,
-                    "cache_creation_input_tokens": advisor_creation,
-                    "cache_creation_5m_input_tokens": advisor_5m,
-                    "cache_creation_1h_input_tokens": advisor_1h,
-                    "total_tokens": sum(
+                    request_id=request_id,
+                    usage_kind="advisor_call",
+                    input_tokens=advisor_input,
+                    output_tokens=advisor_output,
+                    cached_input_tokens=advisor_cached,
+                    cache_creation_input_tokens=advisor_creation,
+                    cache_creation_5m_input_tokens=advisor_5m,
+                    cache_creation_1h_input_tokens=advisor_1h,
+                    total_tokens=sum(
                         value or 0
                         for value in (
                             advisor_input,
@@ -272,7 +256,7 @@ def convert_thread(path: Path) -> list[dict]:
                             advisor_creation,
                         )
                     ),
-                }
+                )
             )
 
     return events
@@ -367,16 +351,14 @@ def finalize_events(events: list[dict]) -> list[dict]:
         uncached = event.get("input_tokens") or 0
         cached = event.get("cached_input_tokens") or 0
         creation = event.get("cache_creation_input_tokens") or 0
-        output = event.get("output_tokens") or 0
-        if not any(value > 0 for value in (uncached, cached, creation, output)):
-            event["usage_dedup_reason"] = "zero_usage"
-            continue
-        event["usage_canonical"] = True
-        event["usage_source"] = "request_usage"
-        event["call_served_input_tokens"] = uncached + cached + creation
-        event["call_cached_input_tokens"] = cached
-        event["call_cache_creation_input_tokens"] = creation
-        event["call_cache_creation_5m_input_tokens"] = event.get("cache_creation_5m_input_tokens") or 0
-        event["call_cache_creation_1h_input_tokens"] = event.get("cache_creation_1h_input_tokens") or 0
-        event["call_output_tokens"] = output
+        mark_canonical_usage(
+            event,
+            "request_usage",
+            served_input_tokens=uncached + cached + creation,
+            cached_input_tokens=cached,
+            cache_creation_input_tokens=creation,
+            cache_creation_5m_input_tokens=event.get("cache_creation_5m_input_tokens") or 0,
+            cache_creation_1h_input_tokens=event.get("cache_creation_1h_input_tokens") or 0,
+            output_tokens=event.get("output_tokens") or 0,
+        )
     return events

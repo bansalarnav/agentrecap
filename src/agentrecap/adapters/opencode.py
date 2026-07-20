@@ -9,8 +9,10 @@ from urllib.parse import quote
 from .common import (
     anonymous_id,
     anonymous_id_or_none,
+    base_event,
     event_sort_key,
     init_usage_fields,
+    mark_canonical_usage,
     serialized_length,
 )
 
@@ -119,6 +121,9 @@ def _convert_database(path: Path) -> list[dict]:
     uri = f"file:{quote(str(path), safe='/:')}?mode=ro"
     try:
         connection = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error:
+        return []
+    try:
         session_rows = connection.execute(
             "SELECT id, parent_id, time_created, time_updated FROM session"
         ).fetchall()
@@ -131,8 +136,7 @@ def _convert_database(path: Path) -> list[dict]:
     except sqlite3.Error:
         return []
     finally:
-        if "connection" in locals():
-            connection.close()
+        connection.close()
 
     sessions = {
         session_id: {
@@ -209,58 +213,13 @@ def _convert_session(
     events = []
 
     def add_event(**values: object) -> None:
-        event = {
-            "source": SOURCE,
-            "provider": PROVIDER,
-            "thread_id": thread_id,
-            "stream_id": "main",
-            "file_id": file_id,
-            "file_event_index": len(events),
-            "event_index": None,
-            "timestamp": None,
-            "event_id": None,
-            "parent_event_id": None,
-            "agent_id": thread_id if is_sidechain else None,
-            "is_sidechain": is_sidechain,
-            "parent_thread_id": parent_thread_id,
-            "child_thread_id": None,
-            "spawned_by_event_id": None,
-            "event_kind": "other",
-            "raw_event_type": "unknown",
-            "is_run_start": False,
-            "run_end_status": None,
-            "duration_ms": None,
-            "time_to_first_token_ms": None,
-            "model": None,
-            "reasoning_effort": None,
-            "speed": "unknown",
-            "service_tier": None,
-            "inference_geo": None,
-            "message_id": None,
-            "request_id": None,
-            "tool_call_id": None,
-            "tool_name": None,
-            "tool_success": None,
-            "usage_kind": None,
-            "input_tokens": None,
-            "output_tokens": None,
-            "cached_input_tokens": None,
-            "cache_creation_input_tokens": None,
-            "cache_creation_5m_input_tokens": None,
-            "cache_creation_1h_input_tokens": None,
-            "reasoning_output_tokens": None,
-            "total_tokens": None,
-            "cumulative_input_tokens": None,
-            "cumulative_output_tokens": None,
-            "cumulative_cached_input_tokens": None,
-            "cumulative_reasoning_output_tokens": None,
-            "reported_cost_usd": None,
-            "text_length": None,
-            "tool_input_length": None,
-            "tool_output_length": None,
-        }
-        event.update(values)
-        events.append(event)
+        provider = values.pop("provider", PROVIDER)
+        values.setdefault("agent_id", thread_id if is_sidechain else None)
+        values.setdefault("is_sidechain", is_sidechain)
+        values.setdefault("parent_thread_id", parent_thread_id)
+        events.append(
+            base_event(SOURCE, provider, thread_id, file_id, len(events), **values)
+        )
 
     session_time = session.get("time") or {}
     add_event(
@@ -425,19 +384,13 @@ def finalize_events(events: list[dict]) -> list[dict]:
         uncached = event.get("input_tokens") or 0
         cached = event.get("cached_input_tokens") or 0
         creation = event.get("cache_creation_input_tokens") or 0
-        output = event.get("output_tokens") or 0
-        reasoning = event.get("reasoning_output_tokens")
-        if not any(value > 0 for value in (uncached, cached, creation, output)):
-            event["usage_dedup_reason"] = "zero_usage"
-            continue
-
-        event["usage_canonical"] = True
-        event["usage_source"] = "step_finish_usage"
-        event["call_served_input_tokens"] = uncached + cached + creation
-        event["call_cached_input_tokens"] = cached
-        event["call_cache_creation_input_tokens"] = creation
-        event["call_cache_creation_5m_input_tokens"] = 0
-        event["call_cache_creation_1h_input_tokens"] = 0
-        event["call_output_tokens"] = output
-        event["call_reasoning_output_tokens"] = reasoning
+        mark_canonical_usage(
+            event,
+            "step_finish_usage",
+            served_input_tokens=uncached + cached + creation,
+            cached_input_tokens=cached,
+            cache_creation_input_tokens=creation,
+            output_tokens=event.get("output_tokens") or 0,
+            reasoning_output_tokens=event.get("reasoning_output_tokens"),
+        )
     return events
