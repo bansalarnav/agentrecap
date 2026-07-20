@@ -21,10 +21,9 @@ BARE_MODEL_PROVIDERS = ("anthropic", "openai", "google")
 
 # Anthropic bills API traffic pinned to US inference at a 10% premium.
 ANTHROPIC_US_GEO_MULTIPLIER = 1.1
-# Anthropic's list-price cache rates relative to the input price, used when the
-# catalog entry does not break out cache pricing.
-ANTHROPIC_CACHE_READ_MULTIPLIER = 0.1
-ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25
+# Anthropic's 1h-TTL cache writes bill at 2x the input price. models.dev has
+# no TTL-specific cost keys, so this is the one rate the catalog cannot
+# supply; every other price comes from the catalog entry.
 CACHE_WRITE_1H_MULTIPLIER = 2
 
 # Written by earlier versions; removed when reusing an output directory.
@@ -116,7 +115,12 @@ def _match_model(row: dict, catalog: dict) -> tuple[dict | None, dict | None, st
 
 
 def _context_tier_cost(row: dict, cost: dict) -> tuple[dict, str | None]:
-    """Apply the highest context-window pricing tier the call crossed."""
+    """Apply the highest context-window pricing tier the call crossed.
+
+    models.dev encodes long-context pricing two ways: a ``tiers`` list with
+    explicit thresholds, and a flat ``context_over_200k`` dict of override
+    prices. The list takes precedence when present.
+    """
     served_input_tokens = _nz(row.get("served_input_tokens", 0))
     tier_label = None
     context_tiers = sorted(
@@ -132,19 +136,23 @@ def _context_tier_cost(row: dict, cost: dict) -> tuple[dict, str | None]:
         if threshold is not None and served_input_tokens > threshold:
             cost.update({key: value for key, value in tier.items() if key != "tier"})
             tier_label = f"context_over_{threshold}"
+
+    flat_tier = cost.get("context_over_200k")
+    if not context_tiers and served_input_tokens > 200_000 and isinstance(flat_tier, dict):
+        cost.update(flat_tier)
+        tier_label = "context_over_200000"
     return cost, tier_label
 
 
-def _estimated_cost_usd(row: dict, cost: dict, pricing_provider: str | None) -> float:
+def _estimated_cost_usd(row: dict, cost: dict) -> float:
     """Price one call's token usage against a resolved cost entry ($ per Mtok)."""
     input_price = cost["input"]
     output_price = cost["output"]
-    if pricing_provider == "anthropic":
-        cache_read_price = cost.get("cache_read", input_price * ANTHROPIC_CACHE_READ_MULTIPLIER)
-        cache_write_price = cost.get("cache_write", input_price * ANTHROPIC_CACHE_WRITE_MULTIPLIER)
-    else:
-        cache_read_price = cost.get("cache_read", input_price)
-        cache_write_price = cost.get("cache_write", input_price)
+    # Cache rates come straight from the catalog; a provider that lists no
+    # cache pricing bills those tokens at the normal input rate. Only the
+    # 1h-TTL write surcharge is computed, since the catalog has no TTL keys.
+    cache_read_price = cost.get("cache_read", input_price)
+    cache_write_price = cost.get("cache_write", input_price)
     cache_write_5m_price = cost.get("cache_write_5m", cache_write_price)
     cache_write_1h_price = cost.get("cache_write_1h", input_price * CACHE_WRITE_1H_MULTIPLIER)
     reasoning_price = cost.get("reasoning", output_price)
@@ -229,7 +237,7 @@ def _price_model_call(row: dict, catalog: dict) -> None:
     if cost.get("input") is None or cost.get("output") is None:
         row["pricing_status"] = "incomplete_price"
         return
-    row["estimated_cost_usd"] = _estimated_cost_usd(row, cost, pricing_provider)
+    row["estimated_cost_usd"] = _estimated_cost_usd(row, cost)
 
 
 def add_model_costs(model_usage: pd.DataFrame, catalog: dict) -> pd.DataFrame:
