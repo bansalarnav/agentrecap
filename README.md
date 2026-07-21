@@ -1,5 +1,9 @@
 # agentrecap
 
+> Get deeper insights into your local coding agents beyond cost.
+
+![An agentrecap report showing usage metrics and charts](docs/agentrecap-report.png)
+
 Generate a local, metadata-only HTML report from your Codex, Claude Code, and OpenCode sessions.
 
 ```bash

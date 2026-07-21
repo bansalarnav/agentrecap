@@ -1,5 +1,3 @@
-"""Command-line entry point for agentrecap."""
-
 import argparse
 import webbrowser
 from datetime import datetime
@@ -26,7 +24,7 @@ def main() -> None:
         default=default_output_dir,
         help="Report directory (default: ~/.agentrecap/reports/<timestamp>)",
     )
-    parser.add_argument("--title", default="Coding-agent usage report")
+    parser.add_argument("--title", default="agentrecap report")
     parser.add_argument("--open", action="store_true", help="Open the finished report in the default browser")
     args = parser.parse_args()
 
@@ -34,13 +32,17 @@ def main() -> None:
         source: path.expanduser().resolve()
         for source, path in inputs_from_args(args).items()
     }
+
+    print("Analysing...")
+
     output_dir = args.output_dir.expanduser().resolve()
     if not any(ADAPTERS[source].discover_sessions(path) for source, path in inputs.items()):
         parser.error("No coding agent sessions found on this machine")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    print("Analysing...")
+
     run_pipeline(inputs, output_dir)
+
     index_path = build_report(output_dir, args.title)
     print(f'Generated report at "{index_path}"')
     if args.open:

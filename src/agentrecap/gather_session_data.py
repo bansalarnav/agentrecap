@@ -1,11 +1,10 @@
 """Gather metadata from supported coding-agent session files."""
 
-import argparse
 from pathlib import Path
 
 import pandas as pd
 
-from .adapters import ADAPTERS, add_input_arguments, inputs_from_args
+from .adapters import ADAPTERS 
 
 
 def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
@@ -39,19 +38,3 @@ def convert_sessions(inputs: dict[str, Path], output: Path) -> dict:
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert agent sessions to a metadata-only CSV file.")
-    add_input_arguments(parser)
-    parser.add_argument("--output", type=Path, default=Path("sanitized") / "threads.csv")
-    args = parser.parse_args()
-
-    result = convert_sessions(inputs_from_args(args), args.output)
-    summary = " and ".join(
-        f"{count} {ADAPTERS[source].DISPLAY_NAME} threads"
-        for source, count in result["threads"].items()
-    )
-    print(f"Converted {summary} ({result['events']} events) into {args.output}")
-
-
-if __name__ == "__main__":
-    main()
