@@ -1,6 +1,6 @@
 import argparse
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from .adapters import ADAPTERS, add_input_arguments, inputs_from_args
@@ -25,8 +25,25 @@ def main() -> None:
         help="Report directory (default: ~/.agentrecap/reports/<timestamp>)",
     )
     parser.add_argument("--title", default="agentrecap report")
+    parser.add_argument(
+        "--from",
+        dest="from_date",
+        type=date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="Analyze events on or after this local date",
+    )
+    parser.add_argument(
+        "--to",
+        dest="to_date",
+        type=date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="Analyze events on or before this local date",
+    )
     parser.add_argument("--open", action="store_true", help="Open the finished report in the default browser")
     args = parser.parse_args()
+
+    if args.from_date and args.to_date and args.from_date > args.to_date:
+        parser.error("--from must be on or before --to")
 
     inputs = {
         source: path.expanduser().resolve()
@@ -41,7 +58,20 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    run_pipeline(inputs, output_dir)
+    start_time = (
+        datetime.combine(args.from_date, time.min).astimezone()
+        if args.from_date
+        else None
+    )
+    end_time = (
+        datetime.combine(args.to_date + timedelta(days=1), time.min).astimezone()
+        if args.to_date
+        else None
+    )
+    try:
+        run_pipeline(inputs, output_dir, start_time=start_time, end_time=end_time)
+    except ValueError as error:
+        parser.error(str(error))
 
     index_path = build_report(output_dir, args.title)
     print(f'Generated report at "{index_path}"')
