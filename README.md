@@ -34,13 +34,13 @@ agentrecap \
   --codex-input /path/to/codex/home \
   --claude-input /path/to/claude/projects \
   --opencode-input /path/to/opencode/data \
-  --from 2026-01-01 \
-  --to 2026-06-30 \
+  --since 2026-01-01 \
+  --until 2026-06-30 \
   --output-dir /path/to/report \
   --title "My agent usage report"
 ```
 
-Use `--from` and `--to` to limit the analysis by local calendar date. Both dates are inclusive, and either flag can be used on its own. Omit both flags to analyze all available sessions.
+Use `--since` and `--until` to limit the analysis by local calendar date. Both dates are inclusive, and either flag can be used on its own. Omit both flags to analyze all available sessions.
 
 The report includes:
 

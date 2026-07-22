@@ -26,15 +26,15 @@ def main() -> None:
     )
     parser.add_argument("--title", default="agentrecap report")
     parser.add_argument(
-        "--from",
-        dest="from_date",
+        "--since",
+        dest="since_date",
         type=date.fromisoformat,
         metavar="YYYY-MM-DD",
         help="Analyze events on or after this local date",
     )
     parser.add_argument(
-        "--to",
-        dest="to_date",
+        "--until",
+        dest="until_date",
         type=date.fromisoformat,
         metavar="YYYY-MM-DD",
         help="Analyze events on or before this local date",
@@ -42,8 +42,8 @@ def main() -> None:
     parser.add_argument("--open", action="store_true", help="Open the finished report in the default browser")
     args = parser.parse_args()
 
-    if args.from_date and args.to_date and args.from_date > args.to_date:
-        parser.error("--from must be on or before --to")
+    if args.since_date and args.until_date and args.since_date > args.until_date:
+        parser.error("--since must be on or before --until")
 
     inputs = {
         source: path.expanduser().resolve()
@@ -59,13 +59,13 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     start_time = (
-        datetime.combine(args.from_date, time.min).astimezone()
-        if args.from_date
+        datetime.combine(args.since_date, time.min).astimezone()
+        if args.since_date
         else None
     )
     end_time = (
-        datetime.combine(args.to_date + timedelta(days=1), time.min).astimezone()
-        if args.to_date
+        datetime.combine(args.until_date + timedelta(days=1), time.min).astimezone()
+        if args.until_date
         else None
     )
     try:
