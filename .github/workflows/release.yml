@@ -1,0 +1,185 @@
+name: Release
+run-name: Release ${{ inputs.release_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Unique identifier used by scripts/release to locate this run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: version
+        name: Read project version
+        shell: bash
+        run: |
+          version="$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [[ "$GITHUB_REF_TYPE" != "tag" || "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Release ref must be tag v$version, got $GITHUB_REF" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+  build-python:
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v8
+
+      - name: Build wheel and source distribution
+        run: uv build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  build-native:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            package: agentrecap-darwin-arm64
+          - runner: macos-15-intel
+            package: agentrecap-darwin-x64
+          - runner: ubuntu-22.04-arm
+            package: agentrecap-linux-arm64
+          - runner: ubuntu-22.04
+            package: agentrecap-linux-x64
+          - runner: windows-11-arm
+            package: agentrecap-win32-arm64
+          - runner: windows-2025
+            package: agentrecap-win32-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v8
+
+      - name: Build standalone executable
+        shell: bash
+        run: bash scripts/build-binary "${{ matrix.package }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: dist/native/${{ matrix.package }}
+          if-no-files-found: error
+
+  build-musl:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04-arm
+            package: agentrecap-linux-arm64-musl
+          - runner: ubuntu-22.04
+            package: agentrecap-linux-x64-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build standalone executable in Alpine
+        env:
+          PACKAGE_NAME: ${{ matrix.package }}
+        run: |
+          docker run --rm \
+            --env PACKAGE_NAME \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            python:3.12-alpine \
+            sh -c 'apk add --no-cache binutils build-base freetype-dev libpng-dev pkgconf && pip install uv && sh scripts/build-binary "$PACKAGE_NAME"'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: dist/native/${{ matrix.package }}
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - validate
+      - build-python
+      - build-native
+      - build-musl
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agentrecap-*
+          path: dist/npm
+
+      - name: Prepare npm packages
+        run: python scripts/prepare-npm-packages.py
+
+      - name: Publish native npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          version="${{ needs.validate.outputs.version }}"
+          for package_dir in dist/npm/agentrecap-*; do
+            package_name="$(node -p "require('./$package_dir/package.json').name")"
+            if npm view "$package_name@$version" version >/dev/null 2>&1; then
+              echo "Already published $package_name@$version"
+            else
+              npm publish "$package_dir" --access public --provenance
+            fi
+          done
+
+      - name: Publish main npm package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          version="${{ needs.validate.outputs.version }}"
+          if npm view "agentrecap@$version" version >/dev/null 2>&1; then
+            echo "Already published agentrecap@$version"
+          else
+            npm publish dist/npm/agentrecap --access public --provenance
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/python
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/python
+          skip-existing: true

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: scripts/build-binary <npm-platform-package>" >&2
+  exit 1
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+package_name="$1"
+output_dir="$repo_root/dist/native/$package_name"
+work_dir="$repo_root/build/pyinstaller/$package_name"
+
+case "$package_name" in
+  agentrecap-darwin-arm64|\
+  agentrecap-darwin-x64|\
+  agentrecap-linux-arm64|\
+  agentrecap-linux-x64|\
+  agentrecap-linux-arm64-musl|\
+  agentrecap-linux-x64-musl|\
+  agentrecap-win32-arm64|\
+  agentrecap-win32-x64)
+    ;;
+  *)
+    echo "Unknown platform package: $package_name" >&2
+    exit 1
+    ;;
+esac
+
+mkdir -p "$output_dir/bin" "$work_dir"
+
+cd "$repo_root"
+uv run \
+  --isolated \
+  --locked \
+  --with "pyinstaller==6.21.0" \
+  pyinstaller \
+  --clean \
+  --noconfirm \
+  --onefile \
+  --name agentrecap \
+  --collect-data agentrecap \
+  --distpath "$output_dir/bin" \
+  --workpath "$work_dir" \
+  --specpath "$work_dir" \
+  scripts/pyinstaller_entrypoint.py
+
+if [[ "$package_name" == agentrecap-win32-* ]]; then
+  binary="$output_dir/bin/agentrecap.exe"
+else
+  binary="$output_dir/bin/agentrecap"
+fi
+
+if [[ ! -f "$binary" ]]; then
+  echo "PyInstaller did not produce $binary" >&2
+  exit 1
+fi
+
+if [[ "$package_name" != agentrecap-win32-* ]]; then
+  chmod 755 "$binary"
+fi
+
+echo "Built $binary"

@@ -1,0 +1,15 @@
+{
+  "name": "agentrecap",
+  "version": "0.0.0",
+  "description": "Analyze local Codex, Claude Code, and OpenCode sessions",
+  "bin": {
+    "agentrecap": "./bin/agentrecap.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

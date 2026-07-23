@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: scripts/release <version>" >&2
+  echo "Example: scripts/release 0.6.0" >&2
+  exit 1
+fi
+
+version="$1"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Version must be valid for both Python and npm, for example 0.6.0." >&2
+  exit 1
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "The working tree must be clean before releasing." >&2
+  exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required to update the Python project version." >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm is required to update the npm package version." >&2
+  exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "The GitHub CLI is required to start the release workflow." >&2
+  exit 1
+fi
+
+gh auth status >/dev/null
+
+branch="$(git branch --show-current)"
+if [[ "$branch" != "main" ]]; then
+  echo "Releases must be run from the main branch, not $branch." >&2
+  exit 1
+fi
+
+uv version "$version" --no-sync
+npm --prefix npm/agentrecap version \
+  "$version" \
+  --no-git-tag-version \
+  --allow-same-version \
+  --ignore-scripts
+
+python_version="$(uv version --short)"
+npm_version="$(node -p 'require("./npm/agentrecap/package.json").version')"
+if [[ "$python_version" != "$version" || "$npm_version" != "$version" ]]; then
+  echo "Failed to set both package versions to $version." >&2
+  exit 1
+fi
+
+git add -- pyproject.toml uv.lock npm/agentrecap/package.json
+if ! git diff --cached --quiet; then
+  git commit --message "Release v$version"
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Unexpected files changed while updating the release version." >&2
+  exit 1
+fi
+
+tag="v$version"
+head="$(git rev-parse HEAD)"
+
+git push origin main
+
+if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+  tagged_commit="$(git rev-list -n 1 "$tag")"
+  if [[ "$tagged_commit" != "$head" ]]; then
+    echo "$tag already points to a different commit." >&2
+    exit 1
+  fi
+else
+  git tag --annotate "$tag" --message "Release $tag"
+fi
+
+git push origin "refs/tags/$tag"
+
+release_id="$version-$(date +%s)"
+gh workflow run release.yml --ref "$tag" --field "release_id=$release_id"
+
+run_id=""
+for _ in {1..30}; do
+  run_id="$(
+    gh run list \
+      --workflow release.yml \
+      --event workflow_dispatch \
+      --limit 30 \
+      --json databaseId,displayTitle \
+      --jq ".[] | select(.displayTitle == \"Release $release_id\") | .databaseId" \
+      | head -n 1
+  )"
+  if [[ -n "$run_id" ]]; then
+    break
+  fi
+  sleep 2
+done
+
+if [[ -z "$run_id" ]]; then
+  echo "The release workflow was dispatched, but its run could not be located." >&2
+  exit 1
+fi
+
+echo "Watching release workflow run $run_id"
+gh run watch "$run_id" --exit-status
