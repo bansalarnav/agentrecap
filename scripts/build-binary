@@ -49,6 +49,7 @@ if [[ ${#font_cache_files[@]} -ne 1 || ! -f "${font_cache_files[0]}" ]]; then
   echo "Matplotlib font cache was not generated" >&2
   exit 1
 fi
+font_cache_relative="matplotlib-cache/${font_cache_files[0]##*/}"
 
 uv run \
   --isolated \
@@ -59,7 +60,7 @@ uv run \
   --noconfirm \
   --onedir \
   --name agentrecap \
-  --add-data "${font_cache_files[0]}:agentrecap" \
+  --add-data "$font_cache_relative:agentrecap" \
   --collect-data agentrecap \
   --exclude-module pyarrow \
   --distpath "$output_dir/bin" \
