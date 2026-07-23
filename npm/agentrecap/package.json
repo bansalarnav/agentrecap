@@ -1,6 +1,6 @@
 {
   "name": "agentrecap",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Analyze local Codex, Claude Code, and OpenCode sessions",
   "repository": {
     "type": "git",
