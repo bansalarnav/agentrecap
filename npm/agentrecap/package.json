@@ -1,6 +1,6 @@
 {
   "name": "agentrecap",
-  "version": "0.0.0",
+  "version": "0.5.0",
   "description": "Analyze local Codex, Claude Code, and OpenCode sessions",
   "bin": {
     "agentrecap": "./bin/agentrecap.js"
