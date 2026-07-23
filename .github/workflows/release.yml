@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Build wheel and source distribution
         run: uv build
@@ -75,7 +75,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Build standalone executable
         shell: bash
@@ -110,7 +110,7 @@ jobs:
             --volume "$GITHUB_WORKSPACE:/workspace" \
             --workdir /workspace \
             python:3.12-alpine \
-            sh -c 'apk add --no-cache binutils build-base freetype-dev libpng-dev pkgconf && pip install uv && sh scripts/build-binary "$PACKAGE_NAME"'
+            sh -c 'apk add --no-cache bash binutils build-base freetype-dev libpng-dev pkgconf && pip install uv && bash scripts/build-binary "$PACKAGE_NAME"'
 
       - uses: actions/upload-artifact@v4
         with:
