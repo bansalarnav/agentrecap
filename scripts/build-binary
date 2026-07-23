@@ -19,8 +19,8 @@ case "$package_name" in
   agentrecap-linux-x64|\
   agentrecap-linux-arm64-musl|\
   agentrecap-linux-x64-musl|\
-  agentrecap-win32-arm64|\
-  agentrecap-win32-x64)
+  agentrecap-windows-arm64|\
+  agentrecap-windows-x64)
     ;;
   *)
     echo "Unknown platform package: $package_name" >&2
@@ -46,7 +46,7 @@ uv run \
   --specpath "$work_dir" \
   scripts/pyinstaller_entrypoint.py
 
-if [[ "$package_name" == agentrecap-win32-* ]]; then
+if [[ "$package_name" == agentrecap-windows-* ]]; then
   binary="$output_dir/bin/agentrecap.exe"
 else
   binary="$output_dir/bin/agentrecap"
@@ -57,7 +57,7 @@ if [[ ! -f "$binary" ]]; then
   exit 1
 fi
 
-if [[ "$package_name" != agentrecap-win32-* ]]; then
+if [[ "$package_name" != agentrecap-windows-* ]]; then
   chmod 755 "$binary"
 fi
 

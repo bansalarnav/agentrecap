@@ -31,7 +31,8 @@ function isMusl() {
 }
 
 const suffix = platform === "linux" && isMusl() ? "-musl" : "";
-const packageName = `agentrecap-${platform}-${arch}${suffix}`;
+const packagePlatform = platform === "win32" ? "windows" : platform;
+const packageName = `agentrecap-${packagePlatform}-${arch}${suffix}`;
 const binaryName = platform === "win32" ? "agentrecap.exe" : "agentrecap";
 
 let binary;

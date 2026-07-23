@@ -64,9 +64,9 @@ jobs:
           - runner: ubuntu-22.04
             package: agentrecap-linux-x64
           - runner: windows-11-arm
-            package: agentrecap-win32-arm64
+            package: agentrecap-windows-arm64
           - runner: windows-2025
-            package: agentrecap-win32-x64
+            package: agentrecap-windows-x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
