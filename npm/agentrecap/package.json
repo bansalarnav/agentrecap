@@ -2,6 +2,10 @@
   "name": "agentrecap",
   "version": "0.5.1",
   "description": "Analyze local Codex, Claude Code, and OpenCode sessions",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bansalarnav/agentrecap"
+  },
   "bin": {
     "agentrecap": "./bin/agentrecap.js"
   },

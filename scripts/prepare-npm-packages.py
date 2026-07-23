@@ -63,6 +63,10 @@ for package_name, platform in PLATFORMS.items():
             "name": package_name,
             "version": version,
             "description": f"Native {project['name']} binary for {package_name.removeprefix('agentrecap-')}",
+            "repository": {
+                "type": "git",
+                "url": "https://github.com/bansalarnav/agentrecap",
+            },
             "os": platform["os"],
             "cpu": platform["cpu"],
             **({"libc": platform["libc"]} if "libc" in platform else {}),
