@@ -38,7 +38,12 @@ const binaryName = platform === "win32" ? "agentrecap.exe" : "agentrecap";
 let binary;
 try {
   const manifest = require.resolve(`${packageName}/package.json`);
-  binary = path.join(path.dirname(manifest), "bin", binaryName);
+  binary = path.join(
+    path.dirname(manifest),
+    "bin",
+    "agentrecap",
+    binaryName,
+  );
 } catch {
   console.error(
     `agentrecap does not have an installed binary for ${platform}-${arch}${suffix}.`,

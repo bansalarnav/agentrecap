@@ -2,11 +2,13 @@
 
 import json
 import shutil
+import ssl
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import certifi
 import numpy as np
 import pandas as pd
 from jinja2 import Environment, PackageLoader, select_autoescape
@@ -17,6 +19,7 @@ from .plots import CHARTS
 
 
 MODELS_DEV_URL = "https://models.dev/api.json"
+PRICING_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
 BARE_MODEL_PROVIDERS = ("anthropic", "openai", "google")
 
 # Anthropic bills API traffic pinned to US inference at a 10% premium.
@@ -66,12 +69,24 @@ def format_table(frame: pd.DataFrame, columns: list[str] | None = None) -> dict:
     }
 
 
-def load_pricing_catalog(data_dir: Path) -> tuple[dict, str]:
-    cache_path = data_dir / "models_dev_api.json"
+def load_pricing_catalog() -> tuple[dict, str]:
+    cache_path = Path.home() / ".agentrecap" / "cache" / "models_dev_api.json"
+    if cache_path.exists():
+        cache_age = datetime.now().timestamp() - cache_path.stat().st_mtime
+        if cache_age < PRICING_CACHE_MAX_AGE_SECONDS:
+            try:
+                return json.loads(cache_path.read_text(encoding="utf-8")), "cached models.dev catalog"
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+
+    print("Loading current model pricing...", flush=True)
     try:
+        ssl_context = ssl.create_default_context()
+        ssl_context.load_verify_locations(cafile=certifi.where())
         request = Request(MODELS_DEV_URL, headers={"User-Agent": "agentrecap/0.1"})
-        with urlopen(request, timeout=15) as response:
+        with urlopen(request, timeout=5, context=ssl_context) as response:
             catalog = json.loads(response.read().decode("utf-8"))
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(catalog), encoding="utf-8", newline="\n")
         return catalog, "current models.dev catalog"
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -272,7 +287,7 @@ def _price_model_calls(data_dir: Path) -> tuple[pd.DataFrame, str, list[str]]:
     model_calls.csv is rewritten in place with the pricing columns added;
     analyze_threads regenerates the unpriced table on every pipeline run.
     """
-    pricing_catalog, pricing_source = load_pricing_catalog(data_dir)
+    pricing_catalog, pricing_source = load_pricing_catalog()
     model_calls = pd.read_csv(data_dir / "model_calls.csv")
     model_calls["timestamp"] = pd.to_datetime(model_calls["timestamp"], utc=True, errors="coerce")
     model_calls["model"] = model_calls["model"].fillna("unknown")

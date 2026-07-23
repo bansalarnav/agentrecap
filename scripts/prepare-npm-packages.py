@@ -50,7 +50,7 @@ if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version):
 for package_name, platform in PLATFORMS.items():
     package_dir = DIST / package_name
     binary_name = "agentrecap.exe" if "windows" in package_name else "agentrecap"
-    binary = package_dir / "bin" / binary_name
+    binary = package_dir / "bin" / "agentrecap" / binary_name
     if not binary.is_file():
         raise SystemExit(f"Missing binary: {binary}")
 

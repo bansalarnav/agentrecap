@@ -11,6 +11,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 package_name="$1"
 output_dir="$repo_root/dist/native/$package_name"
 work_dir="$repo_root/build/pyinstaller/$package_name"
+font_cache_dir="$work_dir/matplotlib-cache"
 
 case "$package_name" in
   agentrecap-darwin-arm64|\
@@ -29,8 +30,26 @@ case "$package_name" in
 esac
 
 mkdir -p "$output_dir/bin" "$work_dir"
+rm -rf "$output_dir/bin/agentrecap"
+rm -rf "$font_cache_dir"
+mkdir -p "$font_cache_dir"
 
 cd "$repo_root"
+(
+  cd "$font_cache_dir"
+  MPLCONFIGDIR="$font_cache_dir" uv run \
+    --directory "$repo_root" \
+    --isolated \
+    --locked \
+    python "$repo_root/scripts/build-font-cache.py"
+)
+
+font_cache_files=("$font_cache_dir"/fontlist*.json)
+if [[ ${#font_cache_files[@]} -ne 1 || ! -f "${font_cache_files[0]}" ]]; then
+  echo "Matplotlib font cache was not generated" >&2
+  exit 1
+fi
+
 uv run \
   --isolated \
   --locked \
@@ -38,18 +57,20 @@ uv run \
   pyinstaller \
   --clean \
   --noconfirm \
-  --onefile \
+  --onedir \
   --name agentrecap \
+  --add-data "${font_cache_files[0]}:agentrecap" \
   --collect-data agentrecap \
+  --exclude-module pyarrow \
   --distpath "$output_dir/bin" \
   --workpath "$work_dir" \
   --specpath "$work_dir" \
   scripts/pyinstaller_entrypoint.py
 
 if [[ "$package_name" == agentrecap-windows-* ]]; then
-  binary="$output_dir/bin/agentrecap.exe"
+  binary="$output_dir/bin/agentrecap/agentrecap.exe"
 else
-  binary="$output_dir/bin/agentrecap"
+  binary="$output_dir/bin/agentrecap/agentrecap"
 fi
 
 if [[ ! -f "$binary" ]]; then

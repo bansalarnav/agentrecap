@@ -1,10 +1,12 @@
 import argparse
+import os
+import shutil
+import sys
 import webbrowser
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from .adapters import ADAPTERS, add_input_arguments, inputs_from_args
-from .report import build_report, run_pipeline
 
 
 def main() -> None:
@@ -50,7 +52,20 @@ def main() -> None:
         for source, path in inputs_from_args(args).items()
     }
 
-    print("Analysing...")
+    print("Analysing...", flush=True)
+
+    # Importing the reporting stack loads pandas, NumPy, and Matplotlib. Keep
+    # that work after argument parsing so --help is instant and users see
+    # progress before the heavier modules load.
+    matplotlib_cache_dir = Path.home() / ".agentrecap" / "cache" / "matplotlib"
+    matplotlib_cache_dir.mkdir(parents=True, exist_ok=True)
+    if not any(matplotlib_cache_dir.glob("fontlist*.json")):
+        bundle_dir = getattr(sys, "_MEIPASS", None)
+        if bundle_dir:
+            for bundled_cache in (Path(bundle_dir) / "agentrecap").glob("fontlist*.json"):
+                shutil.copy2(bundled_cache, matplotlib_cache_dir / bundled_cache.name)
+    os.environ["MPLCONFIGDIR"] = str(matplotlib_cache_dir)
+    from .report import build_report, run_pipeline
 
     output_dir = args.output_dir.expanduser().resolve()
     if not any(ADAPTERS[source].discover_sessions(path) for source, path in inputs.items()):
