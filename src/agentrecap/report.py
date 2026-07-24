@@ -30,7 +30,7 @@ ANTHROPIC_US_GEO_MULTIPLIER = 1.1
 CACHE_WRITE_1H_MULTIPLIER = 2
 
 # Written by earlier versions; removed when reusing an output directory.
-STALE_OUTPUTS = ("daily_load.csv", "daily_load.png")
+STALE_OUTPUTS = ("daily_load.csv", "daily_load.png", "threads.csv")
 
 
 def format_value(value: object) -> str:
@@ -269,7 +269,7 @@ def run_pipeline(
     end_time: datetime | None = None,
 ) -> None:
     data_dir = output_dir / "data"
-    events_path = data_dir / "threads.csv"
+    events_path = output_dir / "threads.csv"
 
     data_dir.mkdir(parents=True, exist_ok=True)
     for filename in (*CHARTS, *STALE_OUTPUTS):

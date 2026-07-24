@@ -8,8 +8,12 @@ Generate a local, metadata-only HTML report from your Codex, Claude Code, and Op
 
 ```bash
 uvx agentrecap
+# or 
+npx agentrecap
 # or
-pipx run agentrecap
+pnpx agentrecap
+# or
+bunx agentrecap
 ```
 
 If you do not have `uvx` or `pipx` installed, clone the repository and run it with Python:
