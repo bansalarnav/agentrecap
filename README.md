@@ -48,7 +48,7 @@ Use `--since` and `--until` to limit the analysis by local calendar date. Both d
 
 The report includes:
 
-- Headline recent, month-to-date, and all-time estimated API costs alongside usage metrics.
+- Headline recent and all-time estimated API costs alongside usage metrics.
 - Codex, Claude, and OpenCode comparisons.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.

@@ -394,10 +394,6 @@ def build_report(output_dir: Path, title: str) -> Path:
     last_30_days_cost = matched_calls.loc[
         local_timestamps.ge(now - pd.Timedelta(days=30)), "estimated_cost_usd"
     ].sum()
-    month_start = now.normalize().replace(day=1)
-    month_to_date_cost = matched_calls.loc[
-        local_timestamps.ge(month_start), "estimated_cost_usd"
-    ].sum()
     monthly_costs, cost_sources = _build_monthly_costs(matched_calls, local_timestamps, data_dir)
     monthly_costs = _add_monthly_loc(
         monthly_costs,
@@ -414,7 +410,6 @@ def build_report(output_dir: Path, title: str) -> Path:
         ("Tool calls / run", format_value(all_summary.get("avg_tool_calls_per_run"))),
         ("Estimated API cost", f"${estimated_cost:,.2f}" if not matched_calls.empty else "—"),
         ("Cost in last 30 days", f"${last_30_days_cost:,.2f}" if not matched_calls.empty else "—"),
-        ("Cost month to date", f"${month_to_date_cost:,.2f}" if not matched_calls.empty else "—"),
     ]
     cards = [{"label": label, "value": format_value(value)} for label, value in cards]
     cards[1:1] = [
