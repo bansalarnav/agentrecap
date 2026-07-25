@@ -13,9 +13,15 @@
 
     <section class="cards">
       {% for card in cards %}
-        <div class="card">
+        <div class="card{% if card.tone %} card-loc{% endif %}">
           <span class="muted">{{ card.label }}</span>
-          <strong>{{ card.value }}</strong>
+          {% if card.tone == "added" %}
+            <strong class="loc-number loc-added">{{ card.value }}</strong>
+          {% elif card.tone == "removed" %}
+            <strong class="loc-number loc-removed">{{ card.value }}</strong>
+          {% else %}
+            <strong>{{ card.value }}</strong>
+          {% endif %}
         </div>
       {% endfor %}
     </section>

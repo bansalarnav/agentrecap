@@ -64,6 +64,8 @@ REQUIRED_COLUMNS = {
     "call_output_tokens",
     "call_reasoning_output_tokens",
     "reported_cost_usd",
+    "loc_added",
+    "loc_removed",
 }
 
 # The model's own activity within a run; its latest timestamp is when the model
@@ -80,6 +82,8 @@ TOKEN_SUM_COLUMNS = [
     "cache_creation_1h_input_tokens",
     "output_tokens",
 ]
+
+LOC_SUM_COLUMNS = ["loc_added", "loc_removed"]
 
 # Aggregated counts that become 0 (not NaN) when a group has no observations.
 COUNT_COLUMNS = [
@@ -114,6 +118,7 @@ def fill_missing_totals(frame: pd.DataFrame, count_columns: list[str]) -> None:
     """Groups without model or tool calls aggregate to NaN; report them as 0."""
     frame[count_columns] = frame[count_columns].fillna(0).astype(int)
     frame[TOKEN_SUM_COLUMNS] = frame[TOKEN_SUM_COLUMNS].fillna(0)
+    frame[LOC_SUM_COLUMNS] = frame[LOC_SUM_COLUMNS].fillna(0).astype(int)
 
 
 def add_usage_ratios(frame: pd.DataFrame) -> None:
@@ -285,6 +290,39 @@ def build_tool_calls(events: pd.DataFrame) -> pd.DataFrame:
     else:
         requests["call_success"] = np.nan
 
+    loc = events[
+        events["tool_call_id"].notna()
+        & (events["loc_added"].notna() | events["loc_removed"].notna())
+    ].copy()
+    if not loc.empty:
+        loc = (
+            loc.sort_values("timestamp", kind="stable")
+            .groupby(["source", "thread_id", "stream_id", "tool_call_id"], as_index=False)
+            .tail(1)[
+                [
+                    "source",
+                    "thread_id",
+                    "stream_id",
+                    "tool_call_id",
+                    "loc_added",
+                    "loc_removed",
+                ]
+            ]
+        )
+        requests = requests.merge(
+            loc,
+            on=["source", "thread_id", "stream_id", "tool_call_id"],
+            how="left",
+            suffixes=("", "_result"),
+        )
+        requests["loc_added"] = requests["loc_added_result"].combine_first(
+            requests["loc_added"]
+        )
+        requests["loc_removed"] = requests["loc_removed_result"].combine_first(
+            requests["loc_removed"]
+        )
+        requests = requests.drop(columns=["loc_added_result", "loc_removed_result"])
+
     return requests[
         [
             "source",
@@ -296,6 +334,8 @@ def build_tool_calls(events: pd.DataFrame) -> pd.DataFrame:
             "tool_call_id",
             "tool_name",
             "call_success",
+            "loc_added",
+            "loc_removed",
         ]
     ].sort_values("timestamp", kind="stable").reset_index(drop=True)
 
@@ -384,7 +424,15 @@ def build_runs(events: pd.DataFrame, model_calls: pd.DataFrame, tool_calls: pd.D
         model=("model", most_common_non_null),
     )
     tool_totals = aggregate_tool_calls(tool_calls[tool_calls["run_id"].notna()], "run_id")
-    runs = runs.merge(call_totals, on="run_id", how="left").merge(tool_totals, on="run_id", how="left")
+    loc_totals = assigned.groupby("run_id", as_index=False).agg(
+        loc_added=("loc_added", "sum"),
+        loc_removed=("loc_removed", "sum"),
+    )
+    runs = (
+        runs.merge(call_totals, on="run_id", how="left")
+        .merge(tool_totals, on="run_id", how="left")
+        .merge(loc_totals, on="run_id", how="left")
+    )
     fill_missing_totals(runs, COUNT_COLUMNS)
 
     # Imported/resumed histories can contain an entire prior run whose events
@@ -456,6 +504,8 @@ def build_threads(
         runs=("run_id", "size"),
         active_duration_seconds=("duration_seconds", "sum"),
         median_run_duration_seconds=("duration_seconds", "median"),
+        loc_added=("loc_added", "sum"),
+        loc_removed=("loc_removed", "sum"),
     )
     call_totals = aggregate_model_calls(
         model_calls,
@@ -499,6 +549,8 @@ def summarize(events: pd.DataFrame, runs: pd.DataFrame, threads: pd.DataFrame) -
                 "avg_tool_calls_per_run": scope_runs["tool_calls"].mean(),
                 "median_tool_calls_per_run": scope_runs["tool_calls"].median(),
                 "p95_tool_calls_per_run": percentile(scope_runs["tool_calls"], 0.95),
+                "loc_added": scope_events["loc_added"].sum(),
+                "loc_removed": scope_events["loc_removed"].sum(),
                 "avg_user_messages_per_thread": scope_threads["user_messages"].mean(),
                 "avg_top_level_user_messages_per_thread": scope_threads["top_level_user_messages"].mean(),
                 "avg_model_calls_per_run": scope_runs["model_calls"].mean(),
@@ -670,6 +722,13 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
         output_dir / "tool_usage.csv", index=False
     )
 
+    loc_usage = events.groupby("source", as_index=False).agg(
+        loc_added=("loc_added", "sum"),
+        loc_removed=("loc_removed", "sum"),
+    )
+    loc_usage[LOC_SUM_COLUMNS] = loc_usage[LOC_SUM_COLUMNS].astype(int)
+    loc_usage.to_csv(output_dir / "loc_usage.csv", index=False)
+
     data_quality_rows = [
         {"check": "events", "value": len(events)},
         {"check": "invalid_timestamps", "value": events["timestamp"].isna().sum()},
@@ -696,7 +755,7 @@ def analyze_threads(input_path: Path, output_dir: Path) -> pd.DataFrame:
     data_quality = pd.DataFrame(data_quality_rows)
     data_quality.to_csv(output_dir / "data_quality.csv", index=False)
 
-    make_plots(runs, threads, model_calls, tool_calls, response_gaps, output_dir)
+    make_plots(runs, threads, model_calls, tool_calls, response_gaps, loc_usage, output_dir)
     return summary
 
 

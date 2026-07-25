@@ -12,6 +12,7 @@ import certifi
 import numpy as np
 import pandas as pd
 from jinja2 import Environment, PackageLoader, select_autoescape
+from markupsafe import Markup
 
 from .analysis import analyze_threads, combined_speed_status, nullable_sum
 from .gather_session_data import convert_sessions
@@ -46,6 +47,14 @@ def format_value(value: object) -> str:
 
 
 def format_table_value(column: str, value: object) -> str:
+    if column == "lines_changed":
+        added, removed = value
+        return Markup(
+            '<span class="loc-change loc-change-inline">'
+            f'<span class="loc-added">+{format_value(added)}</span>'
+            f'<span class="loc-removed">-{format_value(removed)}</span>'
+            "</span>"
+        )
     if pd.isna(value):
         return "—"
     if column.endswith("_cost_usd"):
@@ -55,6 +64,13 @@ def format_table_value(column: str, value: object) -> str:
 
 def format_table(frame: pd.DataFrame, columns: list[str] | None = None) -> dict:
     if columns is not None:
+        if (
+            "lines_changed" in columns
+            and "loc_added" in frame.columns
+            and "loc_removed" in frame.columns
+        ):
+            frame = frame.copy()
+            frame["lines_changed"] = list(zip(frame["loc_added"], frame["loc_removed"]))
         columns = [column for column in columns if column in frame.columns]
         frame = frame[columns]
     return {
@@ -328,6 +344,41 @@ def _build_monthly_costs(
     return monthly_costs, cost_sources
 
 
+def _add_monthly_loc(
+    monthly_costs: pd.DataFrame,
+    events_path: Path,
+    local_timezone,
+    data_dir: Path,
+) -> pd.DataFrame:
+    events = pd.read_csv(
+        events_path,
+        usecols=["timestamp", "loc_added", "loc_removed"],
+        low_memory=False,
+    )
+    timestamps = pd.to_datetime(events["timestamp"], utc=True, errors="coerce")
+    events["month"] = timestamps.dt.tz_convert(local_timezone).dt.strftime("%Y-%m")
+    monthly_loc = events.groupby("month", as_index=False).agg(
+        loc_added=("loc_added", "sum"),
+        loc_removed=("loc_removed", "sum"),
+    )
+    monthly = monthly_costs.merge(monthly_loc, on="month", how="outer")
+    numeric = monthly.columns.difference(["month"])
+    monthly[numeric] = monthly[numeric].fillna(0)
+    monthly[["loc_added", "loc_removed"]] = monthly[
+        ["loc_added", "loc_removed"]
+    ].astype(int)
+    remaining = [
+        column
+        for column in monthly.columns
+        if column not in {"month", "loc_added", "loc_removed"}
+    ]
+    monthly = monthly[["month", "loc_added", "loc_removed", *remaining]].sort_values(
+        "month"
+    )
+    monthly.to_csv(data_dir / "monthly_costs.csv", index=False)
+    return monthly
+
+
 def build_report(output_dir: Path, title: str) -> Path:
     data_dir = output_dir / "data"
     transcript_dir = output_dir / "transcripts"
@@ -348,6 +399,12 @@ def build_report(output_dir: Path, title: str) -> Path:
         local_timestamps.ge(month_start), "estimated_cost_usd"
     ].sum()
     monthly_costs, cost_sources = _build_monthly_costs(matched_calls, local_timestamps, data_dir)
+    monthly_costs = _add_monthly_loc(
+        monthly_costs,
+        output_dir / "threads.csv",
+        now.tzinfo,
+        data_dir,
+    )
 
     summary = pd.read_csv(data_dir / "summary.csv")
     all_summary = summary[summary["scope"].eq("all")].iloc[0]
@@ -360,6 +417,18 @@ def build_report(output_dir: Path, title: str) -> Path:
         ("Cost month to date", f"${month_to_date_cost:,.2f}" if not matched_calls.empty else "—"),
     ]
     cards = [{"label": label, "value": format_value(value)} for label, value in cards]
+    cards[1:1] = [
+        {
+            "label": "Lines added",
+            "value": f"+{format_value(all_summary.get('loc_added'))}",
+            "tone": "added",
+        },
+        {
+            "label": "Lines removed",
+            "value": f"-{format_value(all_summary.get('loc_removed'))}",
+            "tone": "removed",
+        },
+    ]
 
     charts = []
     for filename, (heading, description) in CHARTS.items():
@@ -380,6 +449,7 @@ def build_report(output_dir: Path, title: str) -> Path:
                 "scope",
                 "threads",
                 "runs",
+                "lines_changed",
                 "avg_duration_seconds_per_run",
                 "avg_tool_calls_per_run",
                 "avg_served_input_tokens_per_run",
@@ -416,6 +486,13 @@ def build_report(output_dir: Path, title: str) -> Path:
             table.update(
                 {
                     "heading": heading,
+                    "note": (
+                        "LOC figures are estimates from successful native edit, write, and patch "
+                        "records. Whole-file writes count written lines as added and cannot "
+                        "estimate removed lines."
+                        if filename == "summary.csv"
+                        else None
+                    ),
                     "pricing_source": pricing_source if filename == "model_costs.csv" else None,
                     "unmatched_models": unmatched_models if filename == "model_costs.csv" else [],
                 }
@@ -424,11 +501,17 @@ def build_report(output_dir: Path, title: str) -> Path:
 
     monthly_costs_table = format_table(
         monthly_costs.sort_values("month", ascending=False),
-        ["month", *[f"{source}_cost_usd" for source in cost_sources], "combined_cost_usd"],
+        [
+            "month",
+            "lines_changed",
+            *[f"{source}_cost_usd" for source in cost_sources],
+            "combined_cost_usd",
+        ],
     )
     monthly_costs_table.update(
         {
-            "heading": "Monthly costs",
+            "heading": "Monthly activity and costs",
+            "note": "LOC totals use each edit event's local calendar month.",
             "pricing_source": None,
             "unmatched_models": [],
         }

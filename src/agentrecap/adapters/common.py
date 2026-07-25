@@ -21,6 +21,28 @@ def serialized_length(value: object) -> int | None:
     return len(json.dumps(value, ensure_ascii=False))
 
 
+def line_count(value: object) -> int:
+    if not isinstance(value, str) or not value:
+        return 0
+    return len(value.splitlines())
+
+
+def diff_line_counts(value: object) -> tuple[int, int]:
+    """Estimate added and removed LOC from a unified or apply-patch diff."""
+    if not isinstance(value, str):
+        return 0, 0
+    added = 0
+    removed = 0
+    for line in value.splitlines():
+        is_added_header = line.startswith("+++ ") or line.startswith("+++\t")
+        is_removed_header = line.startswith("--- ") or line.startswith("---\t")
+        if line.startswith("+") and not is_added_header:
+            added += 1
+        elif line.startswith("-") and not is_removed_header:
+            removed += 1
+    return added, removed
+
+
 def speed_status(speed: object, service_tier: object) -> str:
     values = {str(value).lower() for value in (speed, service_tier) if value is not None}
     if values & {"fast", "priority"}:
@@ -117,6 +139,8 @@ def base_event(
         "text_length": None,
         "tool_input_length": None,
         "tool_output_length": None,
+        "loc_added": None,
+        "loc_removed": None,
     }
     unknown = values.keys() - event.keys()
     if unknown:

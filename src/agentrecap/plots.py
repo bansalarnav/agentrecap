@@ -14,6 +14,10 @@ from .adapters import ADAPTERS
 # Every chart make_plots can produce: filename -> (report heading, description).
 # The report renders whichever of these exist after a run, in this order.
 CHARTS = {
+    "loc_by_source.png": (
+        "Lines changed",
+        "Estimated lines added and removed through native editing tools, grouped by source.",
+    ),
     "run_duration_hist.png": ("Run duration", "Distribution of end-to-end run duration."),
     "run_duration_ecdf.png": ("Run duration percentiles", "Cumulative view of run duration."),
     "response_gap_hist.png": ("Response gaps", "Idle time between an answer and the next prompt."),
@@ -331,12 +335,51 @@ def plot_top_tools(tool_calls: pd.DataFrame, path: Path, colors: dict):
     plt.close(fig)
 
 
+def plot_loc_by_source(loc_usage: pd.DataFrame, path: Path):
+    loc_usage = loc_usage.sort_values("source")
+    if loc_usage.empty or not loc_usage[["loc_added", "loc_removed"]].gt(0).any().any():
+        return
+
+    positions = np.arange(len(loc_usage))
+    width = 0.36
+    fig, ax = plt.subplots(figsize=(8, 5))
+    added = ax.bar(
+        positions - width / 2,
+        loc_usage["loc_added"],
+        width,
+        label="Added",
+        color="#27864b",
+    )
+    removed = ax.bar(
+        positions + width / 2,
+        loc_usage["loc_removed"],
+        width,
+        label="Removed",
+        color="#c4473d",
+    )
+    ax.bar_label(added, fmt="{:,.0f}", padding=3, fontsize=9)
+    ax.bar_label(removed, fmt="{:,.0f}", padding=3, fontsize=9)
+    ax.set(
+        title="Estimated lines changed by source",
+        ylabel="Lines",
+        xticks=positions,
+        xticklabels=loc_usage["source"],
+    )
+    ax.ticklabel_format(axis="y", style="plain")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def make_plots(
     runs: pd.DataFrame,
     threads: pd.DataFrame,
     model_calls: pd.DataFrame,
     tool_calls: pd.DataFrame,
     response_gaps: pd.DataFrame,
+    loc_usage: pd.DataFrame,
     output_dir: Path,
 ) -> None:
     sources = set()
@@ -345,6 +388,7 @@ def make_plots(
             sources.update(frame["source"].dropna().unique())
     colors = assign_source_colors(sources)
 
+    plot_loc_by_source(loc_usage, output_dir / "loc_by_source.png")
     plot_log_hist(
         runs,
         "duration_seconds",

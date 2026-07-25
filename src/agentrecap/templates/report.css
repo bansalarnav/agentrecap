@@ -12,7 +12,15 @@ p { margin: 0; }
 .panel { padding: 20px; overflow: auto; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 26px; }
 .card { padding: 18px; }
+.card-loc { min-width: max-content; }
 .card strong { display: block; font-size: 28px; }
+.loc-change { display: inline-flex; gap: .45em; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums; }
+.loc-number { font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.loc-change-inline { font-weight: 700; }
+.loc-added { color: #14804a; }
+.loc-removed { color: #d92d3d; }
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 16px; }
 .chart { padding: 14px; }
 .chart img { display: block; width: 100%; border-radius: 8px; }
@@ -25,4 +33,6 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 tbody tr:hover { background: #f8f9fc; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-@media (max-width: 640px) { main { width: min(100% - 20px, 1440px); padding-top: 24px; } }
+@media (max-width: 640px) {
+  main { width: min(100% - 20px, 1440px); padding-top: 24px; }
+}

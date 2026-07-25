@@ -8,6 +8,7 @@ from .common import (
     base_event,
     event_sort_key,
     init_usage_fields,
+    line_count,
     mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
@@ -58,6 +59,7 @@ def convert_thread(path: Path) -> list[dict]:
     thread_id = anonymous_id(f"claude:{raw_thread_id}")
     file_id = anonymous_id(f"claude-file:{path}")
     tool_names_by_id = {}
+    tool_loc_by_id = {}
     current_model = None
     events = []
 
@@ -103,16 +105,30 @@ def convert_thread(path: Path) -> list[dict]:
             tool_input = None
             tool_output = None
             text = None
+            loc_added = None
+            loc_removed = None
 
             if block_type == "tool_use":
                 tool_name = block.get("name")
                 tool_input = block.get("input")
                 if block.get("id") and tool_name:
                     tool_names_by_id[block["id"]] = tool_name
+                if tool_name == "Edit" and isinstance(tool_input, dict):
+                    loc_added = line_count(tool_input.get("new_string"))
+                    loc_removed = line_count(tool_input.get("old_string"))
+                elif tool_name == "Write" and isinstance(tool_input, dict):
+                    loc_added = line_count(tool_input.get("content"))
+                    loc_removed = 0
+                if block.get("id") and loc_added is not None:
+                    tool_loc_by_id[block["id"]] = (loc_added, loc_removed)
             elif block_type == "tool_result":
                 tool_name = tool_names_by_id.get(block.get("tool_use_id"))
                 tool_output = block.get("content")
                 tool_success = not block.get("is_error", False)
+                if tool_success:
+                    loc_added, loc_removed = tool_loc_by_id.get(
+                        block.get("tool_use_id"), (None, None)
+                    )
             elif block_type == "text":
                 text = block.get("text")
             elif block_type == "thinking":
@@ -193,6 +209,8 @@ def convert_thread(path: Path) -> list[dict]:
                     text_length=serialized_length(text),
                     tool_input_length=serialized_length(tool_input),
                     tool_output_length=serialized_length(tool_output),
+                    loc_added=loc_added if block_type == "tool_result" else None,
+                    loc_removed=loc_removed if block_type == "tool_result" else None,
                 )
             )
 

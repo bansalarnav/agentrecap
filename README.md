@@ -52,7 +52,8 @@ The report includes:
 - Codex, Claude, and OpenCode comparisons.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
-- Human-readable, metadata-only CSV files under the report's `data/` directory.
+- Human-readable, metadata-only CSV files under the report's `data/` directory, including
+  estimated lines added and removed in `loc_usage.csv`.
 
 The generated report does not include transcript contents, only metadata. Thread, run, event, agent, and tool-call identifiers are hashed before they are written.
 

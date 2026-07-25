@@ -10,8 +10,10 @@ from .common import (
     anonymous_id,
     anonymous_id_or_none,
     base_event,
+    diff_line_counts,
     event_sort_key,
     init_usage_fields,
+    line_count,
     mark_canonical_usage,
     serialized_length,
 )
@@ -86,6 +88,43 @@ def _timestamp(value: object) -> str | None:
 def _provider(value: object) -> str:
     provider = str(value) if value else PROVIDER
     return PROVIDER_ALIASES.get(provider, provider)
+
+
+def _tool_loc(tool_name: object, state: dict) -> tuple[int | None, int | None]:
+    if state.get("status") != "completed":
+        return None, None
+
+    tool_input = state.get("input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    metadata = state.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if tool_name == "edit":
+        if metadata.get("diff"):
+            return diff_line_counts(metadata["diff"])
+        return (
+            line_count(tool_input.get("newString")),
+            line_count(tool_input.get("oldString")),
+        )
+    if tool_name == "write":
+        return line_count(tool_input.get("content")), 0
+    if tool_name == "apply_patch":
+        files = metadata.get("files")
+        if isinstance(files, list):
+            added = sum(
+                item.get("additions", 0)
+                for item in files
+                if isinstance(item, dict) and isinstance(item.get("additions", 0), (int, float))
+            )
+            removed = sum(
+                item.get("deletions", 0)
+                for item in files
+                if isinstance(item, dict) and isinstance(item.get("deletions", 0), (int, float))
+            )
+            return int(added), int(removed)
+        return diff_line_counts(tool_input.get("patchText"))
+    return None, None
 
 
 def _convert_json_thread(path: Path) -> list[dict]:
@@ -328,6 +367,7 @@ def _convert_session(
                 )
 
             text = part.get("text") if part_type in {"text", "reasoning"} else None
+            loc_added, loc_removed = _tool_loc(part.get("tool"), state)
             add_event(
                 provider=_provider(provider_id),
                 timestamp=_timestamp(part_timestamp),
@@ -360,6 +400,8 @@ def _convert_session(
                 tool_output_length=(
                     serialized_length(state.get("output")) if part_type == "tool" else None
                 ),
+                loc_added=loc_added,
+                loc_removed=loc_removed,
             )
 
     return events

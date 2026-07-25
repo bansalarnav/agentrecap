@@ -6,8 +6,10 @@ from .common import (
     anonymous_id,
     anonymous_id_or_none,
     base_event,
+    diff_line_counts,
     event_sort_key,
     init_usage_fields,
+    line_count,
     mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
@@ -75,6 +77,25 @@ def _event_kind(record_type: str, payload_type: str | None, role: str | None) ->
     elif record_type == "event_msg" and payload_type in RUN_END_STATUSES:
         return "run_end"
     return "other"
+
+
+def _patch_loc(payload: dict) -> tuple[int | None, int | None]:
+    if payload.get("type") != "patch_apply_end" or not payload.get("success"):
+        return None, None
+    added = 0
+    removed = 0
+    for change in (payload.get("changes") or {}).values():
+        if not isinstance(change, dict):
+            continue
+        if change.get("type") == "add":
+            added += line_count(change.get("content"))
+        elif change.get("type") == "delete":
+            removed += line_count(change.get("content"))
+        elif change.get("type") == "update":
+            change_added, change_removed = diff_line_counts(change.get("unified_diff"))
+            added += change_added
+            removed += change_removed
+    return added, removed
 
 
 def convert_thread(path: Path) -> list[dict]:
@@ -156,6 +177,8 @@ def convert_thread(path: Path) -> list[dict]:
                 tool_names_by_call_id[call_id] = tool_name
         elif call_id:
             tool_name = tool_names_by_call_id.get(call_id)
+            if payload_type == "patch_apply_end":
+                tool_name = tool_name or "apply_patch"
 
         usage = info.get("last_token_usage") or {}
         total_usage = info.get("total_token_usage") or {}
@@ -179,6 +202,14 @@ def convert_thread(path: Path) -> list[dict]:
         elif payload_type in TOOL_RESULT_TYPES:
             tool_output = payload.get("output")
 
+        loc_added, loc_removed = _patch_loc(payload)
+        if (
+            loc_added is None
+            and event_kind == "tool_call"
+            and tool_name == "apply_patch"
+            and payload_type == "custom_tool_call"
+        ):
+            loc_added, loc_removed = diff_line_counts(tool_input)
         events.append(
             base_event(
                 SOURCE,
@@ -218,6 +249,8 @@ def convert_thread(path: Path) -> list[dict]:
                 text_length=serialized_length(content),
                 tool_input_length=serialized_length(tool_input),
                 tool_output_length=serialized_length(tool_output),
+                loc_added=loc_added,
+                loc_removed=loc_removed,
             )
         )
 
@@ -232,6 +265,23 @@ def finalize_events(events: list[dict]) -> list[dict]:
     without a ledger fall back to the last per-call snapshot per file. All
     duplicate or superseded rows are kept, marked with a usage_dedup_reason.
     """
+    # Prefer the structured, successful patch result over the model's raw
+    # patch estimate when both are present for the same call.
+    structured_patch_results = {
+        (event["thread_id"], event["tool_call_id"])
+        for event in events
+        if event.get("raw_event_type") == "event_msg.patch_apply_end"
+        and event.get("loc_added") is not None
+    }
+    for event in events:
+        if (
+            event.get("event_kind") == "tool_call"
+            and event.get("tool_name") == "apply_patch"
+            and (event["thread_id"], event["tool_call_id"]) in structured_patch_results
+        ):
+            event["loc_added"] = None
+            event["loc_removed"] = None
+
     init_usage_fields(events)
 
     ledger_events = [
