@@ -1,6 +1,6 @@
 # agentrecap
 
-Generate a local, metadata-only HTML report from your Codex, Claude Code, and OpenCode sessions.
+Generate a local, metadata-only HTML report from your Codex, Claude Code, OpenCode, and pi sessions.
 
 ```bash
 npx agentrecap

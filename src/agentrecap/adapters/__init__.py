@@ -29,11 +29,11 @@ it in ``ADAPTERS``.
 import argparse
 from pathlib import Path
 
-from . import claude_code, codex, opencode
+from . import claude_code, codex, opencode, pi
 
 # Cursor and VS Code remain implemented but are intentionally not registered:
 # their local histories do not currently provide reliable token accounting.
-ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode)}
+ADAPTERS = {adapter.SOURCE: adapter for adapter in (codex, claude_code, opencode, pi)}
 
 
 def add_input_arguments(parser: argparse.ArgumentParser) -> None:

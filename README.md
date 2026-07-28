@@ -4,7 +4,7 @@
 
 ![An agentrecap report showing usage metrics and charts](docs/agentrecap-report.png)
 
-Generate a local, metadata-only HTML report from your Codex, Claude Code, and OpenCode sessions.
+Generate a local, metadata-only HTML report from your Codex, Claude Code, OpenCode, and pi sessions.
 
 ```bash
 uvx agentrecap
@@ -31,13 +31,14 @@ The local virtual environment keeps `agentrecap` and its dependencies separate f
 
 `agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
 
-By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, and OpenCode sessions from `~/.local/share/opencode`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
+By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, OpenCode sessions from `~/.local/share/opencode`, and pi sessions from `~/.pi/agent`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
 
 ```bash
 agentrecap \
   --codex-input /path/to/codex/home \
   --claude-input /path/to/claude/projects \
   --opencode-input /path/to/opencode/data \
+  --pi-input /path/to/pi/agent \
   --since 2026-01-01 \
   --until 2026-06-30 \
   --output-dir /path/to/report \
@@ -49,7 +50,7 @@ Use `--since` and `--until` to limit the analysis by local calendar date. Both d
 The report includes:
 
 - Headline recent and all-time estimated API costs alongside usage metrics.
-- Codex, Claude, and OpenCode comparisons.
+- Codex, Claude, OpenCode, and pi comparisons.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
 - Human-readable, metadata-only CSV files under the report's `data/` directory, including
