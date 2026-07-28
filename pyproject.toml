@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentrecap"
-version = "0.7.1"
+version = "0.8.0"
 description = "Analyze local Codex, Claude Code, OpenCode, and pi sessions"
 readme = "README.md"
 requires-python = ">=3.10"
