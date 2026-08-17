@@ -379,7 +379,7 @@ def _add_monthly_loc(
     return monthly
 
 
-def build_report(output_dir: Path, title: str) -> Path:
+def build_report(output_dir: Path, title: str, server: dict | None = None) -> Path:
     data_dir = output_dir / "data"
     transcript_dir = output_dir / "transcripts"
     if transcript_dir.exists():
@@ -524,6 +524,7 @@ def build_report(output_dir: Path, title: str) -> Path:
         cards=cards,
         charts=charts,
         tables=tables,
+        server=server,
     )
     index_path = output_dir / "index.html"
     index_path.write_text(document, encoding="utf-8", newline="\n")

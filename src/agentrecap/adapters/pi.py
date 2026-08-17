@@ -20,6 +20,18 @@ extension's tool did on its own, and those report no model of their own.
 ``/fork``, ``/clone`` and ``/tree``'s branch extraction copy the source
 entries verbatim into a new file, keeping their ids and timestamps, so the
 same API call appears in several sessions; finalize_events dedups on that.
+
+Messages themselves have been stable since pi's first release: the same
+roles, the same ``text``/``thinking``/``toolCall`` blocks, and a ``usage``
+whose token fields never changed (``totalTokens``, ``reasoning`` and
+``cacheWrite1h`` were only added alongside them). The pre-versioning files
+pi wrote before mid-November 2025 differ in three ways this adapter handles:
+their header names the model ``model`` and has no provider, tool results
+carry a plain ``output`` string rather than a content-block list, and they
+interleave ``event`` entries, which duplicate what the message entries
+already record and so are kept as ``other``. The oldest of them live under
+``~/.coding-agent`` rather than ``~/.pi``, so they are only read when that
+directory is passed in explicitly.
 """
 
 import json
@@ -209,9 +221,10 @@ def convert_thread(path: Path) -> list[dict]:
     file_id = anonymous_id(f"pi-file:{path}")
     parent_thread_id = _parent_thread_id(header.get("parentSession"))
     # v1 headers seed the session's starting model and thinking level; later
-    # versions record them as their own entries instead.
+    # versions record them as their own entries instead. Headers older than
+    # November 2025 name the model ``model`` and carry no provider.
     provider = _provider(header.get("provider"))
-    model = header.get("modelId")
+    model = header.get("modelId") or header.get("model")
     thinking_level = header.get("thinkingLevel")
     tool_arguments_by_id: dict[str, object] = {}
     events = []
@@ -343,7 +356,11 @@ def convert_thread(path: Path) -> list[dict]:
                 tool_name=message.get("toolName"),
                 tool_success=not is_error,
                 usage_kind="tool_call_usage" if usage else None,
-                tool_output_length=serialized_length(message.get("content")),
+                # Tool results recorded a plain ``output`` string until image
+                # results made them a content-block list in November 2025.
+                tool_output_length=serialized_length(
+                    message.get("content") if message.get("content") is not None else message.get("output")
+                ),
                 loc_added=loc_added,
                 loc_removed=loc_removed,
                 **usage,

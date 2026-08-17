@@ -11,6 +11,13 @@
     <h1>{{ title }}</h1>
     <p class="muted">Generated {{ generated }} · metadata-only local report</p>
 
+    {% if server %}
+      <div class="rerun">
+        <button id="rerun" type="button">Rerun analysis</button>
+        <span id="rerun-status" class="muted">Reruns automatically every {{ server.refresh_label }}</span>
+      </div>
+    {% endif %}
+
     <section class="cards">
       {% for card in cards %}
         <div class="card{% if card.tone %} card-loc{% endif %}">
@@ -71,5 +78,64 @@
       </div>
     {% endfor %}
   </main>
+{% if server %}
+  <script>
+    (function () {
+      // The page reloads itself once the server reports a newer build, so a
+      // timed rerun shows up without anyone touching the browser.
+      const shownBuild = {{ server.build }};
+      const button = document.getElementById("rerun");
+      const status = document.getElementById("rerun-status");
+      const idleText = status.textContent;
+      let timer = null;
+
+      function schedule(delay) {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(check, delay);
+      }
+
+      async function check() {
+        let state;
+        try {
+          const response = await fetch("api/status", { cache: "no-store" });
+          state = await response.json();
+        } catch (error) {
+          status.textContent = "Server unreachable";
+          schedule(10000);
+          return;
+        }
+        if (state.build > shownBuild) {
+          status.textContent = "Loading the new report…";
+          window.location.reload();
+          return;
+        }
+        button.disabled = state.running;
+        if (state.running) {
+          status.textContent = "Rerunning the analysis…";
+        } else if (state.error) {
+          status.textContent = "Last rerun failed: " + state.error;
+        } else {
+          status.textContent = idleText;
+        }
+        schedule(state.running ? 2000 : 20000);
+      }
+
+      button.addEventListener("click", async function () {
+        button.disabled = true;
+        status.textContent = "Rerunning the analysis…";
+        try {
+          await fetch("api/refresh", { method: "POST" });
+        } catch (error) {
+          status.textContent = "Could not reach the server";
+          button.disabled = false;
+          return;
+        }
+        schedule(1500);
+      });
+
+      schedule(5000);
+    })();
+  </script>
+{% endif %}
 </body>
 </html>

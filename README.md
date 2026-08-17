@@ -47,6 +47,16 @@ agentrecap \
 
 Use `--since` and `--until` to limit the analysis by local calendar date. Both dates are inclusive, and either flag can be used on its own. Omit both flags to analyze all available sessions.
 
+### Keeping a report running
+
+`--server` builds the report and then keeps serving it at `http://127.0.0.1:8973/` instead of exiting:
+
+```bash
+agentrecap --server --port 8973 --refresh-minutes 30
+```
+
+Once it is listening, it prints a clickable URL and asks whether to open it in your browser, the same way a one-shot run does; `--open` opens it without the question. The analysis reruns every 30 minutes (`--refresh-minutes`) into the same output directory, so the URL stays stable and the page reloads itself once a new report is ready. The page also gets a **Rerun analysis** button for refreshing it on demand. The server binds to localhost only, and a failed rerun leaves the previous report in place. Press Ctrl+C to stop it.
+
 The report includes:
 
 - Headline recent and all-time estimated API costs alongside usage metrics.

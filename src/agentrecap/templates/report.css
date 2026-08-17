@@ -21,6 +21,11 @@ p { margin: 0; }
 .loc-change-inline { font-weight: 700; }
 .loc-added { color: #14804a; }
 .loc-removed { color: #d92d3d; }
+.rerun { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 14px; }
+.rerun button { font: inherit; padding: 7px 15px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--paper); color: var(--ink); cursor: pointer; }
+.rerun button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.rerun button:disabled { color: var(--muted); cursor: progress; }
 .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 16px; }
 .chart { padding: 14px; }
 .chart img { display: block; width: 100%; border-radius: 8px; }
