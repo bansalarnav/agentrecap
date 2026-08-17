@@ -94,6 +94,15 @@ class ReportBuilder:
                 if error is None:
                     self._build_id = build_id
                     self._generated = _now()
+                served_build, generated = self._build_id, self._generated
+
+        # The report path never changes, so reruns report when they finished
+        # rather than repeating where: silence here leaves anyone watching the
+        # terminal unable to tell a slow rebuild from a stuck one.
+        if error is None:
+            print(f"Report updated {generated} (build {served_build})", flush=True)
+        else:
+            print(f"Rerun failed, still serving build {served_build}", flush=True)
         return True
 
     def rebuild_in_background(self) -> bool:
