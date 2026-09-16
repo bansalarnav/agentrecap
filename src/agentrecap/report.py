@@ -283,6 +283,7 @@ def run_pipeline(
     output_dir: Path,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
+    thread_ids: set[str] | None = None,
 ) -> None:
     data_dir = output_dir / "data"
     events_path = output_dir / "threads.csv"
@@ -291,7 +292,13 @@ def run_pipeline(
     for filename in (*CHARTS, *STALE_OUTPUTS):
         (data_dir / filename).unlink(missing_ok=True)
 
-    convert_sessions(inputs, events_path, start_time=start_time, end_time=end_time)
+    convert_sessions(
+        inputs,
+        events_path,
+        start_time=start_time,
+        end_time=end_time,
+        thread_ids=thread_ids,
+    )
     print(f"Session data saved to {events_path}")
     print("Generating Report...")
     analyze_threads(events_path, data_dir)

@@ -47,6 +47,16 @@ agentrecap \
 
 Use `--since` and `--until` to limit the analysis by local calendar date. Both dates are inclusive, and either flag can be used on its own. Omit both flags to analyze all available sessions.
 
+### Recording new sessions
+
+Run `start` to build a report from sessions created after recording begins:
+
+```bash
+agentrecap start
+```
+
+Keep the command running while you work, then press `q` or Ctrl+C to stop and build the report. Activity added to a session that already existed when recording began is not included.
+
 ### Keeping a report running
 
 `--server` builds the report and then keeps serving it at `http://127.0.0.1:8973/` instead of exiting:

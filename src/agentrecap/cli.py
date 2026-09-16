@@ -12,6 +12,38 @@ from .server import DEFAULT_REFRESH_MINUTES as SERVER_DEFAULT_REFRESH_MINUTES
 from .server import refresh_label, serve
 
 
+def wait_for_recording_stop() -> None:
+    """Wait for q on an interactive terminal, restoring its settings afterward."""
+    if not sys.stdin.isatty():
+        while True:
+            key = sys.stdin.read(1)
+            if not key or key.lower() == "q":
+                return
+
+    if os.name == "nt":
+        import msvcrt
+
+        while msvcrt.getwch().lower() != "q":
+            pass
+        print()
+        return
+
+    import termios
+    import tty
+
+    file_descriptor = sys.stdin.fileno()
+    previous_settings = termios.tcgetattr(file_descriptor)
+    try:
+        tty.setcbreak(file_descriptor)
+        while True:
+            key = sys.stdin.read(1)
+            if not key or key.lower() == "q":
+                break
+        print()
+    finally:
+        termios.tcsetattr(file_descriptor, termios.TCSADRAIN, previous_settings)
+
+
 def main() -> None:
     default_output_dir = (
         Path.home()
@@ -21,6 +53,12 @@ def main() -> None:
     )
     parser = argparse.ArgumentParser(
         description="Analyze local coding-agent sessions and create an offline HTML report."
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("start",),
+        help="Use 'start' to record sessions created until you press q",
     )
     add_input_arguments(parser)
     parser.add_argument(
@@ -71,11 +109,32 @@ def main() -> None:
         parser.error("--port must be between 1 and 65535")
     if args.refresh_minutes <= 0:
         parser.error("--refresh-minutes must be greater than 0")
+    if args.command == "start" and args.server:
+        parser.error("start cannot be combined with --server")
+    if args.command == "start" and (args.since_date or args.until_date):
+        parser.error("start cannot be combined with --since or --until")
 
     inputs = {
         source: path.expanduser().resolve()
         for source, path in inputs_from_args(args).items()
     }
+
+    recorded_thread_ids = None
+    if args.command == "start":
+        from .gather_session_data import discover_thread_ids
+
+        print("Scanning existing sessions...", flush=True)
+        existing_thread_ids = discover_thread_ids(inputs)
+        print("Recording new sessions. Press q to stop and build the report.", flush=True)
+        try:
+            wait_for_recording_stop()
+        except KeyboardInterrupt:
+            print()
+        current_thread_ids = discover_thread_ids(inputs)
+        recorded_thread_ids = current_thread_ids - existing_thread_ids
+        if not recorded_thread_ids:
+            print("No new coding agent sessions were created while recording.")
+            return
 
     print("Analysing...", flush=True)
 
@@ -111,7 +170,13 @@ def main() -> None:
 
     def build(build_id: int) -> Path:
         """Regenerate the whole report directory. Reused for every server rerun."""
-        run_pipeline(inputs, output_dir, start_time=start_time, end_time=end_time)
+        run_pipeline(
+            inputs,
+            output_dir,
+            start_time=start_time,
+            end_time=end_time,
+            thread_ids=recorded_thread_ids,
+        )
         return build_report(
             output_dir,
             args.title,

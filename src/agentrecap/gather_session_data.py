@@ -8,11 +8,26 @@ import pandas as pd
 from .adapters import ADAPTERS
 
 
+def discover_thread_ids(inputs: dict[str, Path]) -> set[str]:
+    """Return the anonymized ids of every session currently on disk."""
+    thread_ids: set[str] = set()
+    for source, input_path in inputs.items():
+        adapter = ADAPTERS[source]
+        for path in adapter.discover_sessions(input_path):
+            thread_ids.update(
+                event["thread_id"]
+                for event in adapter.convert_thread(path)
+                if event.get("thread_id")
+            )
+    return thread_ids
+
+
 def convert_sessions(
     inputs: dict[str, Path],
     output: Path,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
+    thread_ids: set[str] | None = None,
 ) -> dict:
     all_events = []
     for source, input_path in inputs.items():
@@ -24,6 +39,10 @@ def convert_sessions(
         # Canonical-usage marking needs every session of a source at once:
         # resumed/forked sessions duplicate calls across files.
         source_events = adapter.finalize_events(source_events)
+        if thread_ids is not None:
+            source_events = [
+                event for event in source_events if event["thread_id"] in thread_ids
+            ]
         all_events.extend(source_events)
 
     output.parent.mkdir(parents=True, exist_ok=True)
