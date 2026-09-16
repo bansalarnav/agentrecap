@@ -57,6 +57,8 @@ agentrecap start
 
 Keep the command running while you work, then press `q` or Ctrl+C to stop and build the report. Activity added to a session that already existed when recording began is not included.
 
+Add `--server` to serve the captured report after recording stops. The server keeps refreshing those captured sessions without adding sessions created later.
+
 ### Keeping a report running
 
 `--server` builds the report and then keeps serving it at `http://127.0.0.1:8973/` instead of exiting:

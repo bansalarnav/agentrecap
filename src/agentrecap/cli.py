@@ -109,8 +109,6 @@ def main() -> None:
         parser.error("--port must be between 1 and 65535")
     if args.refresh_minutes <= 0:
         parser.error("--refresh-minutes must be greater than 0")
-    if args.command == "start" and args.server:
-        parser.error("start cannot be combined with --server")
     if args.command == "start" and (args.since_date or args.until_date):
         parser.error("start cannot be combined with --since or --until")
 
