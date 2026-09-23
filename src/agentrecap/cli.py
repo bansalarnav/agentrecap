@@ -69,6 +69,12 @@ def main() -> None:
     )
     parser.add_argument("--title", default="agentrecap report")
     parser.add_argument(
+        "--dir",
+        type=Path,
+        metavar="DIRECTORY",
+        help="Include sessions started in or accessing this directory or its descendants",
+    )
+    parser.add_argument(
         "--since",
         dest="since_date",
         type=date.fromisoformat,
@@ -111,6 +117,9 @@ def main() -> None:
         parser.error("--refresh-minutes must be greater than 0")
     if args.command == "start" and (args.since_date or args.until_date):
         parser.error("start cannot be combined with --since or --until")
+    directory = args.dir.expanduser().resolve() if args.dir is not None else None
+    if directory is not None and not directory.is_dir():
+        parser.error(f"--dir must be an existing directory: {args.dir}")
 
     inputs = {
         source: path.expanduser().resolve()
@@ -174,6 +183,7 @@ def main() -> None:
             start_time=start_time,
             end_time=end_time,
             thread_ids=recorded_thread_ids,
+            directory=directory,
         )
         return build_report(
             output_dir,

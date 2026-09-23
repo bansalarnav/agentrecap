@@ -28,20 +28,29 @@ def convert_sessions(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     thread_ids: set[str] | None = None,
+    directory: Path | None = None,
 ) -> dict:
     all_events = []
+    if directory is not None:
+        from .directory_filter import matching_thread_ids
+
     for source, input_path in inputs.items():
         adapter = ADAPTERS[source]
         paths = adapter.discover_sessions(input_path)
         source_events = []
+        directory_thread_ids: set[str] = set()
         for path in paths:
+            if directory is not None:
+                directory_thread_ids.update(matching_thread_ids(source, path, directory))
             source_events.extend(adapter.convert_thread(path))
         # Canonical-usage marking needs every session of a source at once:
         # resumed/forked sessions duplicate calls across files.
         source_events = adapter.finalize_events(source_events)
-        if thread_ids is not None:
+        if thread_ids is not None or directory is not None:
             source_events = [
-                event for event in source_events if event["thread_id"] in thread_ids
+                event for event in source_events
+                if (thread_ids is None or event["thread_id"] in thread_ids)
+                and (directory is None or event["thread_id"] in directory_thread_ids)
             ]
         all_events.extend(source_events)
 
@@ -57,8 +66,12 @@ def convert_sessions(
         events_df = events_df[included].copy()
 
     if events_df.empty:
-        range_suffix = " in the selected date range" if start_time or end_time else ""
-        raise ValueError(f"No coding agent events found{range_suffix}")
+        filters = []
+        if directory is not None:
+            filters.append(f"for directory {directory}")
+        if start_time or end_time:
+            filters.append("in the selected date range")
+        raise ValueError("No coding agent events found" + (" " + " ".join(filters) if filters else ""))
 
     thread_counts = {
         source: group["thread_id"].nunique()

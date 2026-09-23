@@ -42,11 +42,14 @@ agentrecap \
   --omp-input /path/to/omp/agent \
   --since 2026-01-01 \
   --until 2026-06-30 \
+  --dir /path/to/project \
   --output-dir /path/to/report \
   --title "My agent usage report"
 ```
 
 Use `--since` and `--until` to limit the analysis by local calendar date. Both dates are inclusive, and either flag can be used on its own. Omit both flags to analyze all available sessions.
+
+Use `--dir /path/to/project` to include whole sessions that started in that directory or accessed files beneath it, including reads. The path must be an existing directory. `--dir` works with date filters, recording, and the live server. Matching uses working directories and file paths recorded in session logs; accesses without a recorded path cannot be inferred.
 
 ### Recording new sessions
 
