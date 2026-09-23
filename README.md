@@ -4,7 +4,7 @@
 
 ![An agentrecap report showing usage metrics and charts](docs/agentrecap-report.png)
 
-Generate a local, metadata-only HTML report from your Codex, Claude Code, OpenCode, and pi sessions.
+Generate a local, metadata-only HTML report from your Codex, Claude Code, OpenCode, pi, and Oh My Pi sessions.
 
 ```bash
 uvx agentrecap
@@ -31,7 +31,7 @@ The local virtual environment keeps `agentrecap` and its dependencies separate f
 
 `agentrecap` only reads your session data and writes its report to a separate output directory. It will not modify your existing environment or any existing session data.
 
-By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, OpenCode sessions from `~/.local/share/opencode`, and pi sessions from `~/.pi/agent`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
+By default, `agentrecap` reads active and archived sessions from `~/.codex`, Claude Code sessions from `~/.claude/projects`, OpenCode sessions from `~/.local/share/opencode`, pi sessions from `~/.pi/agent`, and Oh My Pi sessions from `~/.omp/agent`, then writes the report to `~/.agentrecap/reports/<timestamp>/index.html`. When it finishes, it asks whether you want to open the report in your browser. Use `--open` to open it immediately without the prompt.
 
 ```bash
 agentrecap \
@@ -39,6 +39,7 @@ agentrecap \
   --claude-input /path/to/claude/projects \
   --opencode-input /path/to/opencode/data \
   --pi-input /path/to/pi/agent \
+  --omp-input /path/to/omp/agent \
   --since 2026-01-01 \
   --until 2026-06-30 \
   --output-dir /path/to/report \
@@ -72,7 +73,7 @@ Once it is listening, it prints a clickable URL and asks whether to open it in y
 The report includes:
 
 - Headline recent and all-time estimated API costs alongside usage metrics.
-- Codex, Claude, OpenCode, and pi comparisons.
+- Codex, Claude, OpenCode, pi, and Oh My Pi comparisons.
 - Model usage, cache ratios, reasoning-token metrics, and monthly estimated API costs.
 - Run-duration, response-gap, thread-length, token, cache, and tool-call charts.
 - Human-readable, metadata-only CSV files under the report's `data/` directory, including

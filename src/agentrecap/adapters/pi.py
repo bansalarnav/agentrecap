@@ -132,6 +132,9 @@ def _session_id_of(path: str) -> str | None:
     try:
         with Path(path).open(encoding="utf-8", errors="replace") as file:
             header = json.loads(file.readline())
+            # Oh My Pi reserves the first line for a mutable title slot.
+            if isinstance(header, dict) and header.get("type") == "title":
+                header = json.loads(file.readline())
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(header, dict) or header.get("type") != "session":
@@ -139,11 +142,12 @@ def _session_id_of(path: str) -> str | None:
     return str(header["id"]) if header.get("id") else None
 
 
-def _parent_thread_id(parent_session: object) -> str | None:
-    """Resolve a header's parentSession path to the parent's thread id."""
+def _parent_thread_id(parent_session: object, source: str) -> str | None:
+    """Resolve a header's parentSession path or id to its thread id."""
     if not isinstance(parent_session, str) or not parent_session:
         return None
-    return anonymous_id_or_none("pi", _session_id_of(parent_session))
+    parent_id = _session_id_of(parent_session) if parent_session.endswith(".jsonl") else parent_session
+    return anonymous_id_or_none(source, parent_id)
 
 
 def _content_text(content: object) -> str | None:
@@ -172,7 +176,7 @@ def _tool_loc(tool_name: object, arguments: object, details: object) -> tuple[in
     if not isinstance(details, dict):
         details = {}
 
-    if tool_name == "edit":
+    if tool_name in {"edit", "apply_patch"}:
         patch = details.get("patch") or details.get("diff")
         if patch:
             return diff_line_counts(patch)
@@ -210,16 +214,16 @@ def _usage_values(usage: object) -> dict | None:
     }
 
 
-def convert_thread(path: Path) -> list[dict]:
+def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
     records = read_jsonl_records(path)
     if not records:
         return []
 
     header = next((record for record in records if record.get("type") == "session"), {})
     raw_thread_id = str(header.get("id") or path.stem)
-    thread_id = anonymous_id(f"pi:{raw_thread_id}")
-    file_id = anonymous_id(f"pi-file:{path}")
-    parent_thread_id = _parent_thread_id(header.get("parentSession"))
+    thread_id = anonymous_id(f"{source}:{raw_thread_id}")
+    file_id = anonymous_id(f"{source}-file:{path}")
+    parent_thread_id = _parent_thread_id(header.get("parentSession"), source)
     # v1 headers seed the session's starting model and thinking level; later
     # versions record them as their own entries instead. Headers older than
     # November 2025 name the model ``model`` and carry no provider.
@@ -232,17 +236,17 @@ def convert_thread(path: Path) -> list[dict]:
     def add_event(record: dict, **values: object) -> None:
         """One event for a session entry, defaulting to the session's state."""
         values.setdefault("timestamp", record.get("timestamp"))
-        values.setdefault("event_id", anonymous_id_or_none("pi-event", record.get("id")))
+        values.setdefault("event_id", anonymous_id_or_none(f"{source}-event", record.get("id")))
         values.setdefault(
-            "parent_event_id", anonymous_id_or_none("pi-event", record.get("parentId"))
+            "parent_event_id", anonymous_id_or_none(f"{source}-event", record.get("parentId"))
         )
         values.setdefault("raw_event_type", record.get("type", "unknown"))
         values.setdefault("model", model)
         values.setdefault("reasoning_effort", thinking_level)
         events.append(
             base_event(
-                SOURCE,
-                provider or PROVIDER,
+                source,
+                provider or source,
                 thread_id,
                 file_id,
                 len(events),
@@ -257,12 +261,15 @@ def convert_thread(path: Path) -> list[dict]:
 
     for record in records:
         record_type = record.get("type", "unknown")
-        if record_type == "session":
+        if record_type in {"session", "title"}:
             continue
 
         if record_type == "model_change":
             provider = _provider(record.get("provider")) or provider
-            model = record.get("modelId") or model
+            model = record.get("modelId") or record.get("model") or model
+            if source == "omp" and isinstance(model, str) and "/" in model:
+                raw_provider, model = model.split("/", 1)
+                provider = _provider(raw_provider)
             add_event(record)
             continue
 
@@ -316,7 +323,7 @@ def convert_thread(path: Path) -> list[dict]:
                     record,
                     event_kind=CONTENT_BLOCK_KINDS.get(block_type, "other"),
                     raw_event_type=f"assistant.{block_type}" if block_type else "assistant",
-                    tool_call_id=anonymous_id_or_none("pi-tool", block.get("id")),
+                    tool_call_id=anonymous_id_or_none(f"{source}-tool", block.get("id")),
                     tool_name=block.get("name") if block_type == "toolCall" else None,
                     usage_kind="model_call" if block_usage else None,
                     text_length=serialized_length(text),
@@ -352,7 +359,7 @@ def convert_thread(path: Path) -> list[dict]:
                 event_kind="tool_result",
                 raw_event_type="message.toolResult",
                 model=None if usage else model,
-                tool_call_id=anonymous_id_or_none("pi-tool", raw_tool_call_id),
+                tool_call_id=anonymous_id_or_none(f"{source}-tool", raw_tool_call_id),
                 tool_name=message.get("toolName"),
                 tool_success=not is_error,
                 usage_kind="tool_call_usage" if usage else None,
