@@ -16,6 +16,7 @@ from .common import (
     line_count,
     mark_canonical_usage,
     serialized_length,
+    transcript_content,
 )
 
 SOURCE = "opencode"
@@ -127,7 +128,7 @@ def _tool_loc(tool_name: object, state: dict) -> tuple[int | None, int | None]:
     return None, None
 
 
-def _convert_json_thread(path: Path) -> list[dict]:
+def _convert_json_thread(path: Path, with_transcript: bool = False) -> list[dict]:
     session = _read_json(path)
     storage_dir = _storage_dir(path)
     if session is None or storage_dir is None:
@@ -154,10 +155,10 @@ def _convert_json_thread(path: Path) -> list[dict]:
                     parts.append(part)
         parts_by_message[str(raw_message_id)] = parts
 
-    return _convert_session(session, messages, parts_by_message, str(path))
+    return _convert_session(session, messages, parts_by_message, str(path), with_transcript=with_transcript)
 
 
-def _convert_database(path: Path) -> list[dict]:
+def _convert_database(path: Path, with_transcript: bool = False) -> list[dict]:
     uri = f"file:{quote(str(path), safe='/:')}?mode=ro"
     try:
         connection = sqlite3.connect(uri, uri=True)
@@ -220,6 +221,7 @@ def _convert_database(path: Path) -> list[dict]:
                 messages_by_session.get(session_id, []),
                 parts_by_session.get(session_id, {}),
                 f"{path}:{session_id}",
+                with_transcript=with_transcript,
             )
         )
     return events
@@ -230,6 +232,7 @@ def _convert_session(
     messages: list[dict],
     parts_by_message: dict[str, list[dict]],
     file_identity: str,
+    with_transcript: bool = False,
 ) -> list[dict]:
     raw_thread_id = str(session.get("id") or file_identity)
     thread_id = anonymous_id(f"opencode:{raw_thread_id}")
@@ -393,6 +396,9 @@ def _convert_session(
                 reasoning_output_tokens=reasoning_tokens,
                 total_tokens=total_tokens,
                 reported_cost_usd=part.get("cost") if has_usage else None,
+                **transcript_content(with_transcript, text=text,
+                                     tool_input=state.get("input") if part_type == "tool" else None,
+                                     tool_output=state.get("output", state.get("error")) if part_type == "tool" else None),
                 text_length=serialized_length(text),
                 tool_input_length=(
                     serialized_length(state.get("input")) if part_type == "tool" else None
@@ -407,10 +413,10 @@ def _convert_session(
     return events
 
 
-def convert_thread(path: Path) -> list[dict]:
+def convert_thread(path: Path, with_transcript: bool = False) -> list[dict]:
     if path.name == "opencode.db":
-        return _convert_database(path)
-    return _convert_json_thread(path)
+        return _convert_database(path, with_transcript=with_transcript)
+    return _convert_json_thread(path, with_transcript=with_transcript)
 
 
 def finalize_events(events: list[dict]) -> list[dict]:

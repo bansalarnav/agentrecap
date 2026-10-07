@@ -67,6 +67,11 @@ def main() -> None:
         default=default_output_dir,
         help="Report directory (default: ~/.agentrecap/reports/<timestamp>)",
     )
+    parser.add_argument(
+        "--with-transcript",
+        action="store_true",
+        help="Include session messages, reasoning, and tool inputs and outputs in threads.csv",
+    )
     parser.add_argument("--title", default="agentrecap report")
     parser.add_argument(
         "--dir",
@@ -184,6 +189,7 @@ def main() -> None:
             end_time=end_time,
             thread_ids=recorded_thread_ids,
             directory=directory,
+            with_transcript=args.with_transcript,
         )
         return build_report(
             output_dir,

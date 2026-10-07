@@ -13,6 +13,7 @@ from .common import (
     mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
+    transcript_content,
     speed_status,
 )
 
@@ -98,7 +99,7 @@ def _patch_loc(payload: dict) -> tuple[int | None, int | None]:
     return added, removed
 
 
-def convert_thread(path: Path) -> list[dict]:
+def convert_thread(path: Path, with_transcript: bool = False) -> list[dict]:
     records = read_jsonl_records(path)
     if not records:
         return []
@@ -246,6 +247,12 @@ def convert_thread(path: Path) -> list[dict]:
                 cumulative_output_tokens=total_usage.get("output_tokens"),
                 cumulative_cached_input_tokens=total_usage.get("cached_input_tokens"),
                 cumulative_reasoning_output_tokens=total_usage.get("reasoning_output_tokens"),
+                **transcript_content(
+                    with_transcript,
+                    text=content if content is not None else payload.get("summary") if payload_type == "reasoning" else None,
+                    tool_input=tool_input,
+                    tool_output=tool_output,
+                ),
                 text_length=serialized_length(content),
                 tool_input_length=serialized_length(tool_input),
                 tool_output_length=serialized_length(tool_output),

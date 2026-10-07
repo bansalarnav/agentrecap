@@ -4,7 +4,7 @@
 
 ![An agentrecap report showing usage metrics and charts](docs/agentrecap-report.png)
 
-Generate a local, metadata-only HTML report from your Codex, Claude Code, OpenCode, pi, and Oh My Pi sessions.
+Generate a local HTML report from your Codex, Claude Code, OpenCode, pi, and Oh My Pi sessions.
 
 ```bash
 uvx agentrecap
@@ -82,7 +82,7 @@ The report includes:
 - Human-readable, metadata-only CSV files under the report's `data/` directory, including
   estimated lines added and removed in `loc_usage.csv`.
 
-The generated report does not include transcript contents, only metadata. Thread, run, event, agent, and tool-call identifiers are hashed before they are written.
+By default, the generated report includes only metadata. Use `--with-transcript` to include recorded messages, reasoning, and tool inputs and outputs in `threads.csv`. The HTML report stays metadata-only. The CSV adds `text`, `tool_input`, and `tool_output` columns. Strings remain readable, and structured values use JSON inside each cell. Transcript exports follow the same date, directory, and recording filters as the report. The flag also works with `--server`. Transcript content is included as recorded and may contain private text or file contents. Thread, run, event, agent, and tool-call identifiers are hashed before they are written.
 
 
 ## Cost estimates

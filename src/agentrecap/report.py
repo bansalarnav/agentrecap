@@ -285,6 +285,7 @@ def run_pipeline(
     end_time: datetime | None = None,
     thread_ids: set[str] | None = None,
     directory: Path | None = None,
+    with_transcript: bool = False,
 ) -> None:
     data_dir = output_dir / "data"
     events_path = output_dir / "threads.csv"
@@ -300,6 +301,7 @@ def run_pipeline(
         end_time=end_time,
         thread_ids=thread_ids,
         directory=directory,
+        with_transcript=with_transcript,
     )
     print(f"Session data saved to {events_path}")
     print("Generating Report...")

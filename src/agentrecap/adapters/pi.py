@@ -49,6 +49,7 @@ from .common import (
     mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
+    transcript_content,
 )
 
 SOURCE = "pi"
@@ -214,7 +215,7 @@ def _usage_values(usage: object) -> dict | None:
     }
 
 
-def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
+def convert_thread(path: Path, source: str = SOURCE, with_transcript: bool = False) -> list[dict]:
     records = read_jsonl_records(path)
     if not records:
         return []
@@ -284,13 +285,18 @@ def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
             add_event(
                 record,
                 usage_kind="summary_call" if usage else None,
+                **transcript_content(with_transcript, text=record.get("summary")),
                 text_length=serialized_length(record.get("summary")),
                 **usage,
             )
             continue
 
         if record_type == "custom_message":
-            add_event(record, text_length=serialized_length(_content_text(record.get("content"))))
+            add_event(
+                record,
+                text_length=serialized_length(_content_text(record.get("content"))),
+                **transcript_content(with_transcript, text=record.get("content")),
+            )
             continue
 
         if record_type != "message":
@@ -326,6 +332,7 @@ def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
                     tool_call_id=anonymous_id_or_none(f"{source}-tool", block.get("id")),
                     tool_name=block.get("name") if block_type == "toolCall" else None,
                     usage_kind="model_call" if block_usage else None,
+                    **transcript_content(with_transcript, text=text, tool_input=arguments),
                     text_length=serialized_length(text),
                     tool_input_length=serialized_length(arguments),
                     **block_usage,
@@ -365,6 +372,7 @@ def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
                 usage_kind="tool_call_usage" if usage else None,
                 # Tool results recorded a plain ``output`` string until image
                 # results made them a content-block list in November 2025.
+                **transcript_content(with_transcript, tool_output=message.get("content") if message.get("content") is not None else message.get("output")),
                 tool_output_length=serialized_length(
                     message.get("content") if message.get("content") is not None else message.get("output")
                 ),
@@ -380,6 +388,7 @@ def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
             add_event(
                 record,
                 raw_event_type="message.bashExecution",
+                **transcript_content(with_transcript, tool_input=message.get("command"), tool_output=message.get("output")),
                 tool_output_length=serialized_length(message.get("output")),
             )
             continue
@@ -389,6 +398,7 @@ def convert_thread(path: Path, source: str = SOURCE) -> list[dict]:
             event_kind=ROLE_KINDS.get(role, "other"),
             raw_event_type=f"message.{role or 'unknown'}",
             is_run_start=role == "user",
+            **transcript_content(with_transcript, text=message.get("content") or message.get("summary")),
             text_length=serialized_length(
                 _content_text(message.get("content") or message.get("summary"))
             ),

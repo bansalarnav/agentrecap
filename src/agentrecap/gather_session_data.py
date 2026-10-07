@@ -1,5 +1,6 @@
 """Gather metadata from supported coding-agent session files."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -29,6 +30,7 @@ def convert_sessions(
     end_time: datetime | None = None,
     thread_ids: set[str] | None = None,
     directory: Path | None = None,
+    with_transcript: bool = False,
 ) -> dict:
     all_events = []
     if directory is not None:
@@ -42,7 +44,10 @@ def convert_sessions(
         for path in paths:
             if directory is not None:
                 directory_thread_ids.update(matching_thread_ids(source, path, directory))
-            source_events.extend(adapter.convert_thread(path))
+            source_events.extend(
+                adapter.convert_thread(path, with_transcript=True)
+                if with_transcript else adapter.convert_thread(path)
+            )
         # Canonical-usage marking needs every session of a source at once:
         # resumed/forked sessions duplicate calls across files.
         source_events = adapter.finalize_events(source_events)
@@ -84,8 +89,23 @@ def convert_sessions(
         ).reset_index(drop=True)
         events_df["event_index"] = events_df.groupby(["source", "thread_id"]).cumcount()
 
+    if with_transcript:
+        contents = events_df.get("transcript", pd.Series(None, index=events_df.index, dtype=object))
+        for column in ("text", "tool_input", "tool_output"):
+            events_df[column] = contents.map(
+                lambda content: _csv_content(content.get(column))
+                if isinstance(content, dict) else None
+            )
+    events_df = events_df.drop(columns=["transcript"], errors="ignore")
     events_df.to_csv(output, index=False)
     return {
         "threads": thread_counts,
         "events": len(events_df),
     }
+
+
+def _csv_content(value: object) -> str | None:
+    """Keep strings readable and serialize structured content inside CSV cells."""
+    if value is None or isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)

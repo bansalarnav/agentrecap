@@ -15,5 +15,5 @@ discover_sessions = pi.discover_sessions
 finalize_events = pi.finalize_events
 
 
-def convert_thread(path: Path) -> list[dict]:
-    return pi.convert_thread(path, source=SOURCE)
+def convert_thread(path: Path, with_transcript: bool = False) -> list[dict]:
+    return pi.convert_thread(path, source=SOURCE, with_transcript=with_transcript)

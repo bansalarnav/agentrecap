@@ -90,6 +90,7 @@ def base_event(
     schema stays identical across sources; unknown field names are rejected
     to catch typos at conversion time.
     """
+    transcript = values.pop("transcript", None)
     event = {
         "source": source,
         "provider": provider,
@@ -146,6 +147,8 @@ def base_event(
     if unknown:
         raise ValueError(f"Unknown event fields: {sorted(unknown)}")
     event.update(values)
+    if transcript is not None:
+        event["transcript"] = transcript
     return event
 
 
@@ -210,3 +213,10 @@ def read_jsonl_records(path: Path) -> list[dict]:
             except json.JSONDecodeError:
                 continue
     return records
+
+
+def transcript_content(enabled: bool, **values: object) -> dict:
+    """Keep source content only when transcript export is requested."""
+    if not enabled:
+        return {}
+    return {"transcript": {key: value for key, value in values.items() if value is not None}}

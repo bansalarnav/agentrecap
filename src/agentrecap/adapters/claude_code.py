@@ -12,6 +12,7 @@ from .common import (
     mark_canonical_usage,
     read_jsonl_records,
     serialized_length,
+    transcript_content,
     speed_status,
 )
 
@@ -50,7 +51,7 @@ def discover_sessions(path: Path) -> list[Path]:
     return sorted(path.rglob("*.jsonl"))
 
 
-def convert_thread(path: Path) -> list[dict]:
+def convert_thread(path: Path, with_transcript: bool = False) -> list[dict]:
     records = read_jsonl_records(path)
     if not records:
         return []
@@ -206,6 +207,7 @@ def convert_thread(path: Path) -> list[dict]:
                         if include_usage
                         else None
                     ),
+                    **transcript_content(with_transcript, text=text, tool_input=tool_input, tool_output=tool_output),
                     text_length=serialized_length(text),
                     tool_input_length=serialized_length(tool_input),
                     tool_output_length=serialized_length(tool_output),
