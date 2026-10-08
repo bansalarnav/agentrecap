@@ -1,6 +1,6 @@
 {
   "name": "agentrecap",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Analyze local Codex, Claude Code, OpenCode, pi, and Oh My Pi sessions",
   "repository": {
     "type": "git",
