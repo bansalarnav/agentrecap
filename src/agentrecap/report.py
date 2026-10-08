@@ -3,6 +3,7 @@
 import json
 import shutil
 import ssl
+import sys
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -303,7 +304,10 @@ def run_pipeline(
         directory=directory,
         with_transcript=with_transcript,
     )
-    print(f"Session data saved to {events_path}")
+    saved_message = f"Saved your transcript to {events_path}"
+    if sys.stdout.isatty():
+        saved_message = f"\033[1m{saved_message}\033[0m"
+    print(saved_message)
     print("Generating Report...")
     analyze_threads(events_path, data_dir)
 
